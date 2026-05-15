@@ -1,0 +1,25 @@
+[package]
+name = "codex-browser-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+doctest = false
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.85"
+serde-wasm-bindgen = "0.6.5"
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4.58"
+
+[dev-dependencies]
+pretty_assertions.workspace = true
