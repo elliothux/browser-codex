@@ -16,7 +16,7 @@ type CaseFile = {
   text: string;
 };
 
-type HarnessCase = {
+type OracleCase = {
   initialFiles?: CaseFile[];
   userInput: Array<Record<string, any>>;
   modelResponses: Array<Array<Record<string, any>>>;
@@ -79,7 +79,7 @@ export function runUpstreamOracle(
   repoRoot: string,
   caseJson: string,
 ): CanonicalTrace {
-  const parsed = JSON.parse(caseJson) as HarnessCase;
+  const parsed = JSON.parse(caseJson) as OracleCase;
   const toolCalls = toolCallsFromCase(parsed);
   const patchOracle = runUpstreamApplyPatchSequence(
     repoRoot,
@@ -114,7 +114,7 @@ function canonicalRequestFromTrace(request: any): CanonicalRequest {
 }
 
 function expectedModelRequests(
-  parsed: HarnessCase,
+  parsed: OracleCase,
   toolOutputs: CanonicalToolOutput[],
   toolSpecs: any[],
 ): CanonicalRequest[] {
@@ -288,7 +288,7 @@ function upstreamToolSpecs(repoRoot: string): any[] {
   }
   const manifest = resolve(
     repoRoot,
-    "harness/oracle/upstream-tool-specs/Cargo.toml",
+    "tests/oracle/upstream-tool-specs/Cargo.toml",
   );
   const result = spawnSync(
     "cargo",
@@ -309,7 +309,7 @@ function upstreamToolSpecs(repoRoot: string): any[] {
 }
 
 function expectedToolOutputs(
-  parsed: HarnessCase,
+  parsed: OracleCase,
   toolCalls: ToolCall[],
   applyPatchByCallId: Map<string, ApplyPatchOracleResult>,
 ): CanonicalToolOutput[] {
@@ -388,7 +388,7 @@ function expectedToolOutputs(
   });
 }
 
-function toolCallsFromCase(parsed: HarnessCase) {
+function toolCallsFromCase(parsed: OracleCase) {
   const calls: ToolCall[] = [];
   for (const response of parsed.modelResponses) {
     for (const event of response) {
@@ -433,7 +433,7 @@ function toolCallsFromCase(parsed: HarnessCase) {
   return calls;
 }
 
-function assistantMessagesFromCase(parsed: HarnessCase) {
+function assistantMessagesFromCase(parsed: OracleCase) {
   const messages: string[] = [];
   for (const response of parsed.modelResponses) {
     for (const event of response) {
@@ -473,7 +473,7 @@ function canonicalEventsFromTrace(events: any[]) {
   });
 }
 
-function canonicalEventsFromCase(parsed: HarnessCase) {
+function canonicalEventsFromCase(parsed: OracleCase) {
   const events: CanonicalEvent[] = [];
   parsed.modelResponses.forEach((response, responseIndex) => {
     let completed = false;

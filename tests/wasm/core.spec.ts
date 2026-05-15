@@ -3,10 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  canonicalizeTrace,
-  runUpstreamOracle,
-} from "../../harness/oracle/upstreamOracle";
+import { canonicalizeTrace, runUpstreamOracle } from "../oracle/upstreamOracle";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, "..");
@@ -22,10 +19,7 @@ test.beforeAll(async () => {
       /^\/+/,
       "",
     );
-    const filePath = resolve(
-      repoRoot,
-      requested || "harness/browser/index.html",
-    );
+    const filePath = resolve(repoRoot, requested || "tests/browser/index.html");
     if (!filePath.startsWith(repoRoot)) {
       response.writeHead(403);
       response.end("forbidden");
@@ -54,7 +48,7 @@ test.beforeAll(async () => {
   });
   const address = server.address();
   if (!address || typeof address === "string") {
-    throw new Error("failed to start harness server");
+    throw new Error("failed to start test server");
   }
   baseUrl = `http://127.0.0.1:${address.port}`;
 });
@@ -222,13 +216,13 @@ async function runCase(
   caseName: string,
 ) {
   const caseJson = readFileSync(
-    join(repoRoot, "harness/cases", `${caseName}.json`),
+    join(repoRoot, "tests/cases", `${caseName}.json`),
     "utf8",
   );
-  await page.goto(`${baseUrl}/harness/browser/index.html`);
+  await page.goto(`${baseUrl}/tests/browser/index.html`);
   const result = await page.evaluate(
     async ({ caseJson: input }) => {
-      // @ts-expect-error The harness server exposes the wasm-bindgen bundle at this browser URL.
+      // @ts-expect-error The test server exposes the wasm-bindgen bundle at this browser URL.
       const mod = await import("/pkg/codex-browser-core/codex_browser_core.js");
       await mod.default("/pkg/codex-browser-core/codex_browser_core_bg.wasm");
       return mod.run_case_json(input);

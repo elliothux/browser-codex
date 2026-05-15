@@ -15,7 +15,7 @@ This project is building a wasm-compatible Codex agent core. Keep implementation
 ## Generated Files
 
 - Do not hand-edit `apps/web/src/routeTree.gen.ts`.
-- Treat `pkg/`, `apps/web/public/wasm/`, and `harness/oracle/upstream-tool-specs/target/` as generated output.
+- Treat `pkg/`, `apps/web/public/wasm/`, and `tests/oracle/upstream-tool-specs/target/` as generated output.
 - Keep generated output out of formatting, linting, and source-review changes unless the user explicitly asks to regenerate it.
 
 ## Upstream Reuse Priority
@@ -103,18 +103,18 @@ Use Rust tests for low-level correctness and wasm compile gating:
 
 Do not add `wasm-pack test --node` as a default layer. Use it only for a specific wasm-bindgen debugging need.
 
-### Bun/Playwright Integration Harness
+### Bun/Playwright Integration Tests
 
 Use Bun + TypeScript + Playwright for browser integration and differential verification. Bash should only be a thin wrapper for building and invoking the TS/Playwright runner.
 
-The harness should run the same case against:
+The Playwright suite should run the same case against:
 
 - upstream native Codex as the oracle
 - our wasm core inside a Playwright browser page with mocked host capabilities
 
 Then compare canonical traces.
 
-Bun owns build scripts, browser harness serving, case loading, and trace comparison. Playwright owns real browser execution, including wasm loading, `wasm-bindgen` APIs, WebContainer adapters, and live provider smoke cases.
+Bun owns build scripts, browser test serving, case loading, and trace comparison. Playwright owns real browser execution, including wasm loading, `wasm-bindgen` APIs, WebContainer adapters, and live provider smoke cases.
 
 Live provider smoke tests are separate from conformance tests. For now, use `.env` to run Alibaba Cloud DashScope `qwen3.5-flash` through its OpenAI-compatible Responses endpoint. Treat this as a compatibility check only:
 
@@ -126,7 +126,7 @@ Live provider smoke tests are separate from conformance tests. For now, use `.en
 
 Test case policy:
 
-- Maintain our own runtime-neutral case files under `harness/cases/*.json`.
+- Maintain our own runtime-neutral case files under `tests/cases/*.json`.
 - Derive case content from upstream Codex tests and fixtures instead of inventing behavior.
 - Do not run the full upstream Codex test suite directly against the wasm core.
 - Generate expected canonical traces from the upstream oracle runner whenever possible.
@@ -193,7 +193,7 @@ Start with:
 
 ## Documentation
 
-Keep the detailed harness design in `docs/wasm-core-harness.md`. If implementation choices change, update that document and this file together.
+Keep the detailed test design in `docs/wasm-core-harness.md`. If implementation choices change, update that document and this file together.
 
 ## Maintenance
 

@@ -4,10 +4,5 @@
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "types": ["bun", "node", "@playwright/test"]
   },
-  "include": [
-    "harness/**/*.ts",
-    "playwright.config.ts",
-    "scripts/**/*.ts",
-    "tests/**/*.ts"
-  ]
+  "include": ["playwright.config.ts", "scripts/**/*.ts", "tests/**/*.ts"]
 }

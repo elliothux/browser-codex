@@ -1,10 +1,10 @@
-# Wasm Core Harness Design
+# Wasm Core Test Design
 
 ## Goal
 
-Build a verification harness for `codex-browser-core` that proves the wasm agent core stays close to upstream Codex behavior.
+Build a verification test suite for `codex-browser-core` that proves the wasm agent core stays close to upstream Codex behavior.
 
-The harness should answer two questions:
+The tests should answer two questions:
 
 - Are we depending on upstream Codex source as much as possible?
 - Does our wasm core produce the same meaningful agent behavior as upstream Codex for the same scripted model responses?
@@ -28,7 +28,7 @@ Practical meaning:
 - Current implementation note: direct wasm checks against upstream `codex-protocol` currently fail through Tokio/mio native networking, and `codex-tools` / `codex-apply-patch` pull native-heavy dependency surfaces. This was re-verified with `cargo check --manifest-path external/codex/codex-rs/apply-patch/Cargo.toml --target wasm32-unknown-unknown`, which fails in `mio` via Tokio native net. Until those crates expose narrower wasm-safe feature gates, `codex-browser-core` may copy the minimal pure wire shapes, tool schema helpers, and apply_patch parser/apply logic needed for the core, preserving upstream names and source comments.
 - Mock only host capabilities, not the agent loop.
 - Avoid editing `external/codex` unless a tiny feature gate unlocks large reuse.
-- Implement from scratch only for harness glue, host mocks, and trace comparison.
+- Implement from scratch only for test glue, host mocks, and trace comparison.
 
 ## Test Strategy
 
@@ -41,9 +41,9 @@ Keep the test system to two layers:
 
 Do not add `wasm-pack test --node` as a default layer. It is useful only if we need to debug a specific wasm-bindgen issue outside a browser. The normal wasm path should be tested in the same kind of browser environment that will run WebContainer.
 
-## Integration Harness Shape
+## Integration Test Shape
 
-Use Bun + TypeScript + Playwright as the integration harness. Bun owns building, serving, case loading, and trace comparison. Playwright owns executing the wasm package inside a real browser page.
+Use Bun + TypeScript + Playwright as the integration test stack. Bun owns building, serving, case loading, and trace comparison. Playwright owns executing the wasm package inside a real browser page.
 
 Why this is the simplest default:
 
@@ -56,7 +56,7 @@ Why this is the simplest default:
 Recommended layout:
 
 ```text
-harness/
+tests/
   cases/
     no_tool.json
     streamed_assistant_text_delta.json
@@ -71,33 +71,16 @@ harness/
     early_stream_close_tool_retry.json
     parallel_tool_calls_disabled.json
 
-  src/
-    caseSchema.ts
-    codexResponsesEvents.ts
-    mockResponsesServer.ts
-    runUpstreamCodex.ts
-    runWasmCore.ts
-    inMemoryFs.ts
-    scriptedExec.ts
-    scriptedApprovals.ts
-    trace.ts
-    canonicalizeTrace.ts
-    compareTrace.ts
-    fsSnapshot.ts
-    serveBrowserHarness.ts
-
   browser/
     index.html
-    runCase.ts
-    mockHost.ts
 
-  run.ts
+  oracle/
+    upstreamOracle.ts
+    upstream-tool-specs/
 
-tests/
   wasm/
     core.spec.ts
-    webcontainer.spec.ts
-    live-provider.spec.ts
+    web-app.spec.ts
 
 scripts/
   test-unit.sh
@@ -124,22 +107,23 @@ set -euo pipefail
   cd crates/codex-browser-core
   wasm-pack build --target web --out-dir ../../pkg/codex-browser-core
 )
-bun harness/src/serveBrowserHarness.ts &
-server_pid=$!
-trap 'kill $server_pid' EXIT
+bun run web:wasm
+if [ ! -d node_modules/@playwright/test ]; then
+  bun install --frozen-lockfile
+fi
 bunx playwright test tests/wasm "$@"
 ```
 
-The browser harness server must set the headers required by WebContainer:
+The browser test server must set the headers required by WebContainer:
 
 ```text
 Cross-Origin-Embedder-Policy: require-corp
 Cross-Origin-Opener-Policy: same-origin
 ```
 
-## Integration Harness Runners
+## Integration Test Runners
 
-These are logical runners inside the Playwright integration harness, not separate test layers.
+These are logical runners inside the Playwright integration suite, not separate test layers.
 
 ### Upstream Oracle Runner
 
@@ -153,8 +137,8 @@ Preferred options, in order:
 
 Current implementation:
 
-- `harness/oracle/upstreamOracle.ts` canonicalizes wasm traces and compares them with upstream-derived expected traces.
-- Tool specs are compared as full canonical JSON. The oracle generates the expected `exec_command`, `write_stdin`, and `apply_patch` specs through `harness/oracle/upstream-tool-specs`, a small native helper that includes upstream spec source files while keeping only the minimal pure wire-shape types needed to avoid native dependency surfaces.
+- `tests/oracle/upstreamOracle.ts` canonicalizes wasm traces and compares them with upstream-derived expected traces.
+- Tool specs are compared as full canonical JSON. The oracle generates the expected `exec_command`, `write_stdin`, and `apply_patch` specs through `tests/oracle/upstream-tool-specs`, a small native helper that includes upstream spec source files while keeping only the minimal pure wire-shape types needed to avoid native dependency surfaces.
 - For `apply_patch` cases, the oracle invokes the native upstream binary from `external/codex/codex-rs/apply-patch/src/standalone_executable.rs` against a temporary workspace, then compares stdout and final file snapshots.
 - For retry cases, incomplete response output items are still recorded into the next prompt, and any completed tool calls are dispatched before retry so their model-visible outputs are also present in the follow-up request.
 - For host-only cases such as denied exec, the oracle compares the model-visible canonical trace for the current host adapter behavior until a full upstream `codex-core` oracle runner is wired in.
@@ -259,7 +243,7 @@ A case should be pure data so both runners can consume it.
 
 Case ownership rule:
 
-- Keep our own `harness/cases/*.json` files as the source of truth.
+- Keep our own `tests/cases/*.json` files as the source of truth.
 - Derive case content from upstream Codex tests by translating and trimming behavior to the wasm core scope.
 - Do not try to run the full upstream Codex test suite directly against the wasm core. Those tests are coupled to native `codex-core`, Tokio, sandboxing, local process management, config, and test-support crates.
 - Reuse upstream fixtures directly when they are already pure data, especially `codex-apply-patch` scenarios.
@@ -531,7 +515,7 @@ Do not add more default test layers until there is a concrete failure mode these
 
 ## Acceptance Criteria
 
-The harness is good enough when:
+The test suite is good enough when:
 
 - A single case can run against upstream Codex and wasm core.
 - Both runners emit the same canonical `AgentTrace`.

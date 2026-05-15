@@ -18,7 +18,7 @@
 - `crates/codex-browser-core` 已存在，并通过 `cargo test -p codex-browser-core` 与 `cargo check -p codex-browser-core --target wasm32-unknown-unknown`。
 - core 已覆盖 no-tool turn、streamed assistant delta、reasoning delta、tool follow-up、history normalization、unsupported tool、`apply_patch`、`exec_command`、`write_stdin`、approval denied、early stream close retry、`parallel_tool_calls` model capability。
 - `apply_patch`、tool schema、exec output shape、request invariants 都有 Rust 或 Playwright 覆盖。
-- `harness/oracle/upstreamOracle.ts` 已做 canonical trace comparison，并通过 upstream-derived full tool specs 与 upstream `apply-patch` binary 校验 patch 行为。
+- `tests/oracle/upstreamOracle.ts` 已做 canonical trace comparison，并通过 upstream-derived full tool specs 与 upstream `apply-patch` binary 校验 patch 行为。
 - `tests/wasm/core.spec.ts` 已在真实 browser wasm package 中跑 runtime-neutral cases。
 - `tests/wasm/web-app.spec.ts` 已覆盖 web app 通过 `packages/browser-runtime` 使用真实 WebContainer FS/exec、Turso browser SQLite、wasm-bindgen host callbacks、UI approval、reload restore。
 
@@ -83,7 +83,7 @@
 
 验收：
 
-- 新增 case 都放在 `harness/cases/*.json`，并注明 upstream 来源。
+- 新增 case 都放在 `tests/cases/*.json`，并注明 upstream 来源。
 - request invariant validation 覆盖所有 tool output 类型。
 - browser-only adapter cases 与 core conformance cases 明确分开。
 
@@ -162,12 +162,12 @@
 
 验收：
 
-- 修改 harness 或 core 边界时，同步更新 `PLAN.md`、`docs/wasm-core-harness.md`，必要时更新 `AGENTS.md`。
+- 修改 tests 或 core 边界时，同步更新 `PLAN.md`、`docs/wasm-core-harness.md`，必要时更新 `AGENTS.md`。
 - 新 contributor 能通过 README 找到默认验证命令。
 
 ## 5. 默认验证命令
 
-每次 core/harness/runtime 改动后至少运行：
+每次 core/tests/runtime 改动后至少运行：
 
 ```bash
 cargo test -p codex-browser-core
