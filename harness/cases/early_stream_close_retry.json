@@ -1,0 +1,33 @@
+{
+  "name": "early_stream_close_retry",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "retry after close" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-1",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "partial" }]
+        }
+      }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "done" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Handoff"
+  short_description: "Save and resume repository task handoffs"
+  default_prompt: "Use $handoff to preserve the current conversation goal, latest user request, progress, risks, branch, and next steps in HANDOFF.md."

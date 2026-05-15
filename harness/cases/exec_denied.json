@@ -1,0 +1,37 @@
+{
+  "name": "exec_denied",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "run command" }],
+  "execApproval": "ask",
+  "approvals": "deny",
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "exec-item",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"rm -rf /workspace\"}",
+          "call_id": "exec-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "denied" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

@@ -1,0 +1,39 @@
+{
+  "name": "apply_patch_add_update_delete",
+  "initialFiles": [
+    { "path": "/workspace/modify.txt", "text": "line1\nline2\n" },
+    { "path": "/workspace/delete.txt", "text": "obsolete\n" }
+  ],
+  "userInput": [{ "type": "text", "text": "apply the patch" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "custom_tool_call",
+          "id": "apply-item",
+          "status": "completed",
+          "call_id": "apply-1",
+          "name": "apply_patch",
+          "input": "*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** Update File: modify.txt\n@@\n-line2\n+changed\n*** Delete File: delete.txt\n*** End Patch"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "patched" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

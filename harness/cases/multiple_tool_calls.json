@@ -1,0 +1,55 @@
+{
+  "name": "multiple_tool_calls",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "run multiple tools" }],
+  "execApproval": "auto",
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "exec-item",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"printf hi\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
+          "call_id": "exec-1"
+        }
+      },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "custom_tool_call",
+          "id": "unsupported-item",
+          "status": "completed",
+          "call_id": "unsupported-1",
+          "name": "unknown_tool",
+          "input": "payload"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "done" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": [
+    {
+      "wall_time_ms": 7,
+      "output": [104, 105, 10],
+      "process_id": null,
+      "exit_code": 0,
+      "original_token_count": 1
+    }
+  ]
+}

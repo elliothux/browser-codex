@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codex Source Review"
+  short_description: "Review Codex source compatibility"
+  default_prompt: "Use $codex-source-review to review whether this implementation stays maximally compatible with upstream Codex source."
+policy:
+  allow_implicit_invocation: false

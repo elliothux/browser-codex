@@ -1,0 +1,21 @@
+{
+  "name": "no_tool",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "say done" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-1",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "done" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ]
+  ],
+  "exec": []
+}

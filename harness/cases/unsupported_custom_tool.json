@@ -1,0 +1,36 @@
+{
+  "name": "unsupported_custom_tool",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "call an unsupported tool" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "custom_tool_call",
+          "id": "unsupported-item",
+          "status": "completed",
+          "call_id": "unsupported-1",
+          "name": "unknown_tool",
+          "input": "payload"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "saw error" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

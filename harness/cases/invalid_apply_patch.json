@@ -1,0 +1,36 @@
+{
+  "name": "invalid_apply_patch",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "apply an invalid patch" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "custom_tool_call",
+          "id": "apply-item",
+          "status": "completed",
+          "call_id": "apply-1",
+          "name": "apply_patch",
+          "input": "*** Begin Patch\n*** Add File: bad.txt\n+bad"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "patch rejected" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

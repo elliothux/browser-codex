@@ -1,0 +1,22 @@
+{
+  "name": "parallel_tool_calls_disabled",
+  "initialFiles": [],
+  "supportsParallelToolCalls": false,
+  "userInput": [{ "type": "text", "text": "no parallel tools for this model" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-1",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "done" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ]
+  ],
+  "exec": []
+}

@@ -1,0 +1,32 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "../../../packages/ui/src/style/theme.css";
+
+@source ".";
+@source "../../../packages/ui/src";
+
+:root {
+  --codex-shell: oklch(12% 0.012 255);
+  --codex-panel: oklch(16% 0.014 255);
+  --codex-panel-raised: oklch(19% 0.015 255);
+  --codex-line: oklch(31% 0.018 255);
+  --codex-text: oklch(93% 0.01 250);
+  --codex-muted: oklch(68% 0.018 250);
+  --codex-accent: oklch(75% 0.13 178);
+}
+
+html,
+body {
+  min-height: 100%;
+  background: var(--codex-shell);
+  color: var(--codex-text);
+}
+
+body {
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}

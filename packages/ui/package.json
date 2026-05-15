@@ -1,0 +1,13 @@
+{
+  "name": "@browser-codex/ui",
+  "type": "module",
+  "exports": {
+    "./lib/*": "./src/lib/*.ts",
+    "./style/*": "./src/style/*.css",
+    "./*": "./src/components/*.tsx"
+  },
+  "scripts": {
+    "fix:imports": "bun run ./scripts/fix-shadcn-imports.ts",
+    "typecheck": "tsc --noEmit"
+  }
+}

@@ -1,0 +1,12 @@
+external/
+pkg/
+apps/web/public/wasm/
+apps/web/src/routeTree.gen.ts
+harness/oracle/upstream-tool-specs/target/
+target/
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+.log/
