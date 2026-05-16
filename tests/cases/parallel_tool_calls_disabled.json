@@ -1,22 +1,48 @@
 {
   "name": "parallel_tool_calls_disabled",
+  "source": "Derived from upstream model capability request-shape expectations, wrapped with an exec_command tool call so default conformance remains tool-backed.",
   "initialFiles": [],
   "supportsParallelToolCalls": false,
-  "userInput": [{ "type": "text", "text": "no parallel tools for this model" }],
+  "userInput": [
+    { "type": "text", "text": "run one tool without parallel tool calls" }
+  ],
+  "execApproval": "auto",
   "modelResponses": [
     [
       { "type": "response.created", "response": { "id": "resp-1" } },
       {
         "type": "response.output_item.done",
         "item": {
+          "type": "function_call",
+          "id": "exec-item",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"printf serial\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
+          "call_id": "exec-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
           "type": "message",
-          "id": "msg-1",
+          "id": "msg-2",
           "role": "assistant",
           "content": [{ "type": "output_text", "text": "done" }]
         }
       },
-      { "type": "response.completed", "response": { "id": "resp-1" } }
+      { "type": "response.completed", "response": { "id": "resp-2" } }
     ]
   ],
-  "exec": []
+  "exec": [
+    {
+      "wall_time_ms": 6,
+      "output": [115, 101, 114, 105, 97, 108],
+      "process_id": null,
+      "exit_code": 0,
+      "original_token_count": 2
+    }
+  ]
 }

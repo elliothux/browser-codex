@@ -226,16 +226,55 @@ export class WebContainerHostExec {
   }
 }
 
+const workspaceSnapshotExcludes = [
+  "node_modules/**",
+  "workspace/node_modules/**",
+  ".git/**",
+  "workspace/.git/**",
+  "dist/**",
+  "workspace/dist/**",
+  "build/**",
+  "workspace/build/**",
+  ".next/**",
+  "workspace/.next/**",
+  ".vite/**",
+  "workspace/.vite/**",
+  ".turbo/**",
+  "workspace/.turbo/**",
+  "coverage/**",
+  "workspace/coverage/**",
+  ".cache/**",
+  "workspace/.cache/**",
+  "*.log",
+  "workspace/*.log",
+  "npm-debug.log*",
+  "workspace/npm-debug.log*",
+  "yarn-debug.log*",
+  "workspace/yarn-debug.log*",
+  "yarn-error.log*",
+  "workspace/yarn-error.log*",
+];
+
 export async function exportWorkspaceSnapshot(webcontainer: WebContainer) {
-  return webcontainer.export("workspace", { format: "json" });
+  // Browser runtime divergence from upstream native filesystem persistence:
+  // WebContainer exports a deterministic binary snapshot and OPFS stores it.
+  // SQLite intentionally receives no file manifest or workspace blob.
+  return webcontainer.export(".", {
+    format: "binary",
+    excludes: workspaceSnapshotExcludes,
+  });
 }
 
 export async function restoreWorkspaceSnapshot(
   webcontainer: WebContainer,
-  snapshot: FileSystemTree,
+  snapshot: FileSystemTree | Uint8Array | ArrayBuffer,
 ) {
   await webcontainer.fs.rm("workspace", { recursive: true, force: true });
-  await webcontainer.mount(workspaceRootTree(snapshot));
+  if (snapshot instanceof Uint8Array || snapshot instanceof ArrayBuffer) {
+    await webcontainer.mount(snapshot);
+  } else {
+    await webcontainer.mount(workspaceRootTree(snapshot));
+  }
 }
 
 function workspaceRootTree(snapshot: FileSystemTree): FileSystemTree {

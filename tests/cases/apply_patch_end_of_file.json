@@ -1,0 +1,39 @@
+{
+  "name": "apply_patch_end_of_file",
+  "source": "Derived from external/codex/codex-rs/apply-patch/tests/fixtures/scenarios/022_update_file_end_of_file_marker.",
+  "initialFiles": [
+    { "path": "/workspace/tail.txt", "text": "first\nsecond\n" }
+  ],
+  "userInput": [{ "type": "text", "text": "update the tail" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "custom_tool_call",
+          "id": "apply-item",
+          "status": "completed",
+          "call_id": "apply-1",
+          "name": "apply_patch",
+          "input": "*** Begin Patch\n*** Update File: tail.txt\n@@\n first\n-second\n+second updated\n*** End of File\n*** End Patch"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "tail updated" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

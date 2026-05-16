@@ -21,6 +21,8 @@ type OracleCase = {
   userInput: Array<Record<string, any>>;
   modelResponses: Array<Array<Record<string, any>>>;
   approvals?: string;
+  execApproval?: string;
+  requirePatchApproval?: boolean;
   supportsParallelToolCalls?: boolean;
   exec?: Array<Record<string, any>>;
 };
@@ -58,6 +60,8 @@ export type CanonicalTrace = {
   event_summaries: CanonicalEvent[];
   tool_outputs: CanonicalToolOutput[];
   final_files: CaseFile[];
+  exec: any[];
+  approvals: any[];
 };
 
 export function canonicalizeTrace(trace: any): CanonicalTrace {
@@ -69,9 +73,14 @@ export function canonicalizeTrace(trace: any): CanonicalTrace {
       call_id: output.call_id,
       output_type: output.output_type ?? output.type,
       success: output.success ?? null,
-      text: output.text ?? null,
+      text:
+        typeof output.text === "string"
+          ? normalizeUnifiedExecOutput(output.text)
+          : null,
     })),
     final_files: [...(trace.final_files ?? [])].sort(comparePath),
+    exec: canonicalHostTrace(trace.exec ?? []),
+    approvals: canonicalHostTrace(trace.approvals ?? []),
   };
 }
 
@@ -102,7 +111,80 @@ export function runUpstreamOracle(
     event_summaries: canonicalEventsFromCase(parsed),
     tool_outputs: expectedOutputs,
     final_files: patchOracle.finalFiles,
+    exec: expectedExecTrace(parsed, toolCalls),
+    approvals: expectedApprovalTrace(parsed, toolCalls),
   };
+}
+
+export function runNativeUpstreamOracle(
+  repoRoot: string,
+  caseJson: string,
+): CanonicalTrace {
+  // Native upstream core oracle:
+  // external/codex/codex-rs/core/tests/common/test_codex.rs
+  // external/codex/codex-rs/core/tests/common/responses.rs
+  // Divergence: the standalone runner imports upstream core test support for
+  // turn-loop behavior, while this TS layer keeps tool specs pinned to the
+  // narrower wasm-core oracle generated from upstream tool schema sources.
+  const caseDir = mkdtempSync(join(tmpdir(), "browser-codex-native-case-"));
+  const casePath = join(caseDir, "case.json");
+  try {
+    const originalCase = JSON.parse(caseJson) as OracleCase;
+    const originalToolCalls = toolCallsFromCase(originalCase);
+    writeFileSync(casePath, caseJson);
+    const manifest = resolve(
+      repoRoot,
+      "tests/oracle/native-core-runner/Cargo.toml",
+    );
+    const result = spawnSync(
+      "cargo",
+      ["run", "--quiet", "--manifest-path", manifest, "--", casePath],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_SANDBOX: "seatbelt",
+          NO_PROXY: "127.0.0.1,localhost",
+          no_proxy: "127.0.0.1,localhost",
+        },
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        `native upstream oracle failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      );
+    }
+
+    const toolSpecs = upstreamToolSpecs(repoRoot);
+    const parsed = JSON.parse(result.stdout) as CanonicalTrace;
+    return {
+      model_requests: (parsed.model_requests ?? []).map((request) => ({
+        ...canonicalRequestFromTrace(request),
+        tools: toolSpecs,
+      })),
+      assistant_messages: parsed.assistant_messages ?? [],
+      event_summaries: parsed.event_summaries ?? [],
+      tool_outputs: (parsed.tool_outputs ?? []).map((output) => ({
+        call_id: output.call_id,
+        output_type: output.output_type,
+        success: output.success ?? null,
+        text:
+          typeof output.text === "string"
+            ? normalizeUnifiedExecOutput(output.text)
+            : null,
+      })),
+      final_files: [...(parsed.final_files ?? [])].sort(comparePath),
+      exec: expectedExecTrace(originalCase, originalToolCalls),
+      approvals: expectedApprovalTrace(originalCase, originalToolCalls),
+    };
+  } finally {
+    rmSync(caseDir, { recursive: true, force: true });
+  }
+}
+
+function canonicalHostTrace(entries: any[]) {
+  return entries.map(canonicalJson);
 }
 
 function canonicalRequestFromTrace(request: any): CanonicalRequest {
@@ -215,7 +297,7 @@ function canonicalInputItem(item: any): Record<string, any> {
         type: "function_call",
         name: item.name,
         namespace: item.namespace ?? null,
-        arguments: item.arguments,
+        arguments: canonicalArgumentsText(item.arguments),
         call_id: item.call_id,
       };
     case "custom_tool_call":
@@ -264,16 +346,45 @@ function canonicalContentItem(item: any) {
 }
 
 function canonicalOutputText(output: any) {
+  const normalize = (text: string) => normalizeUnifiedExecOutput(text);
   if (typeof output === "string") {
-    return output;
+    return normalize(output);
   }
   if (Array.isArray(output)) {
-    return output
-      .filter((item) => item.type === "input_text")
-      .map((item) => item.text)
-      .join("\n");
+    return normalize(
+      output
+        .filter((item) => item.type === "input_text")
+        .map((item) => item.text)
+        .join("\n"),
+    );
   }
   return "";
+}
+
+function canonicalArgumentsText(argumentsText: any) {
+  if (typeof argumentsText !== "string") {
+    return argumentsText;
+  }
+  try {
+    return JSON.stringify(canonicalJson(JSON.parse(argumentsText)));
+  } catch {
+    return argumentsText;
+  }
+}
+
+function normalizeUnifiedExecOutput(text: string) {
+  // Mirrors the canonicalization described in docs/wasm-core-harness.md for
+  // upstream unified exec output: chunk ids and wall times are unstable across
+  // the native core runner, WebContainer, and scripted host snapshots.
+  if (!text.includes("Wall time:") || !text.includes("Output:")) {
+    return text;
+  }
+  return text
+    .replace(/^Chunk ID: [^\n]+\n/m, "Chunk ID: <chunk>\n")
+    .replace(
+      /^Wall time: -?\d+(?:\.\d+)? seconds\n/m,
+      "Wall time: <seconds> seconds\n",
+    );
 }
 
 function canonicalToolSpecs(tools: any[]) {
@@ -318,12 +429,21 @@ function expectedToolOutputs(
   // - external/codex/codex-rs/core/src/tools/registry.rs::unsupported_tool_call_message
   // - external/codex/codex-rs/core/src/tools/context.rs::ExecCommandToolOutput::response_text
   //
-  // Native upstream execution is only used for apply_patch because shell/process
-  // execution is a host boundary in the wasm core. For other model-visible
-  // outputs this raw-translates the upstream output helpers and validates every
-  // scripted tool call rather than only the first call in a turn.
+  // This TS oracle keeps a narrow upstream apply-patch binary fallback for
+  // cases that are not routed through the native core runner. Shell/process
+  // execution remains a host boundary in the wasm core, so non-native cases
+  // raw-translate upstream output helpers and validate every scripted tool call
+  // rather than only the first call in a turn.
   let execIndex = 0;
   return toolCalls.map((toolCall) => {
+    if (toolCall.name === "apply_patch" && toolCall.kind !== "custom") {
+      return {
+        call_id: toolCall.call_id,
+        output_type: "function_call_output",
+        success: false,
+        text: "apply_patch handler received unsupported payload",
+      };
+    }
     if (toolCall.name === "apply_patch") {
       const result = applyPatchByCallId.get(toolCall.call_id);
       if (result === undefined) {
@@ -357,14 +477,32 @@ function expectedToolOutputs(
       };
     }
     if (toolCall.name === "exec_command" && parsed.approvals === "deny") {
+      const validationError = execCommandValidationError(toolCall.arguments);
+      if (validationError !== null) {
+        return {
+          call_id: toolCall.call_id,
+          output_type: "function_call_output",
+          success: false,
+          text: validationError,
+        };
+      }
       return {
         call_id: toolCall.call_id,
         output_type: "function_call_output",
         success: false,
-        text: "exec_command denied by approval policy: scripted denial",
+        text: formatExecRejectedOutput(toolCall.arguments),
       };
     }
     if (toolCall.name === "exec_command") {
+      const validationError = execCommandValidationError(toolCall.arguments);
+      if (validationError !== null) {
+        return {
+          call_id: toolCall.call_id,
+          output_type: "function_call_output",
+          success: false,
+          text: validationError,
+        };
+      }
       const snapshot = parsed.exec?.[execIndex];
       execIndex += 1;
       if (!snapshot) {
@@ -382,10 +520,211 @@ function expectedToolOutputs(
         ),
       };
     }
+    if (toolCall.name === "write_stdin") {
+      const snapshot = parsed.exec?.[execIndex];
+      execIndex += 1;
+      if (!snapshot) {
+        throw new Error("write_stdin oracle requires an exec snapshot");
+      }
+      const args = parseFunctionArguments(toolCall.arguments);
+      return {
+        call_id: toolCall.call_id,
+        output_type: "function_call_output",
+        success: true,
+        text: formatExecOutput(
+          toolCall.call_id,
+          snapshot,
+          args.max_output_tokens,
+        ),
+      };
+    }
+    if (toolCall.kind === "function") {
+      return {
+        call_id: toolCall.call_id,
+        output_type: "function_call_output",
+        success: false,
+        text: `unsupported call: ${toolCall.name}`,
+      };
+    }
     throw new Error(
       `no upstream oracle implemented for tool '${toolCall.name}'`,
     );
   });
+}
+
+function expectedExecTrace(parsed: OracleCase, toolCalls: ToolCall[]) {
+  // Upstream references:
+  // - external/codex/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
+  // - external/codex/codex-rs/core/src/tools/handlers/unified_exec/write_stdin.rs
+  //
+  // Process execution is a browser host boundary. The canonical trace checks
+  // the request payload the wasm core sends to that boundary while model-visible
+  // output remains checked against upstream unified exec formatting.
+  const trace: any[] = [];
+  const approvalMode = parsed.execApproval ?? "ask";
+  const approvalScript = parsed.approvals ?? "allow";
+
+  for (const toolCall of toolCalls) {
+    if (toolCall.name === "exec_command") {
+      if (execCommandValidationError(toolCall.arguments) !== null) {
+        continue;
+      }
+      if (approvalMode === "deny") {
+        continue;
+      }
+      if (approvalMode === "ask" && approvalScript === "deny") {
+        continue;
+      }
+      trace.push({
+        type: "exec_command",
+        request: expectedExecRequest(toolCall.arguments),
+      });
+      continue;
+    }
+
+    if (toolCall.name === "write_stdin") {
+      const args = parseFunctionArguments(toolCall.arguments);
+      const options = expectedOutputPollOptions(args);
+      if (String(args.chars ?? "") === "") {
+        trace.push({
+          type: "poll_output",
+          process_id: Number(args.session_id),
+          options,
+        });
+      } else {
+        trace.push({
+          type: "write_stdin",
+          process_id: Number(args.session_id),
+          input: String(args.chars ?? ""),
+          options,
+        });
+      }
+    }
+  }
+
+  return canonicalHostTrace(trace);
+}
+
+function expectedApprovalTrace(parsed: OracleCase, toolCalls: ToolCall[]) {
+  // Approval transport is an injected browser host boundary. The request shape
+  // follows the upstream approval points in:
+  // external/codex/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs
+  // and external/codex/codex-rs/core/src/tools/handlers/apply_patch.rs.
+  const trace: any[] = [];
+  const approvalMode = parsed.execApproval ?? "ask";
+  const decision =
+    parsed.approvals === "deny"
+      ? { approved: false, reason: "scripted denial" }
+      : { approved: true };
+
+  for (const toolCall of toolCalls) {
+    if (toolCall.name === "exec_command" && approvalMode === "ask") {
+      if (execCommandValidationError(toolCall.arguments) !== null) {
+        continue;
+      }
+      const args = parseFunctionArguments(toolCall.arguments);
+      trace.push({
+        type: "exec",
+        request: {
+          call_id: toolCall.call_id,
+          cmd: String(args.cmd ?? ""),
+          workdir: resolveWorkspacePath(args.workdir),
+        },
+        decision,
+      });
+    }
+
+    if (toolCall.name === "apply_patch" && parsed.requirePatchApproval) {
+      if (toolCall.kind !== "custom") {
+        continue;
+      }
+      trace.push({
+        type: "apply_patch",
+        request: {
+          call_id: toolCall.call_id,
+          workdir: "/workspace",
+          affected_paths: affectedPathsFromPatch(toolCall.input ?? ""),
+        },
+        decision,
+      });
+    }
+  }
+
+  return canonicalHostTrace(trace);
+}
+
+function expectedExecRequest(argumentsJson: string | undefined) {
+  const args = parseFunctionArguments(argumentsJson);
+  const request: Record<string, any> = {
+    cmd: String(args.cmd ?? ""),
+    workdir: resolveWorkspacePath(args.workdir),
+    login: args.login === undefined ? true : Boolean(args.login),
+    yield_time_ms: args.yield_time_ms ?? DEFAULT_YIELD_TIME_MS,
+    max_output_tokens: args.max_output_tokens ?? null,
+    tty: args.tty === undefined ? false : Boolean(args.tty),
+  };
+  if (typeof args.shell === "string") {
+    request.shell = args.shell;
+  }
+  return canonicalJson(request);
+}
+
+function execCommandValidationError(argumentsJson: string | undefined) {
+  // Mirrors the wasm core's current serde/tool validation order for the
+  // runtime-neutral cases in tests/cases. Keep this narrow: richer native
+  // validation should move to the upstream core oracle instead of growing a
+  // parallel local parser here.
+  const args = parseFunctionArguments(argumentsJson);
+  if (typeof args.cmd !== "string") {
+    return "invalid tool arguments for exec_command: missing field `cmd` at line 1 column 2";
+  }
+  if (args.cmd.trim() === "") {
+    return "exec_command rejected an empty cmd";
+  }
+  if (
+    args.sandbox_permissions !== undefined ||
+    args.additional_permissions !== undefined ||
+    args.justification !== undefined ||
+    args.prefix_rule !== undefined
+  ) {
+    return "exec_command native sandbox permission escalation is unsupported in codex-browser-core";
+  }
+  return null;
+}
+
+function expectedOutputPollOptions(args: Record<string, any>) {
+  return canonicalJson({
+    yield_time_ms: args.yield_time_ms ?? DEFAULT_YIELD_TIME_MS,
+    max_output_tokens: args.max_output_tokens ?? null,
+  });
+}
+
+function resolveWorkspacePath(path: any) {
+  if (typeof path !== "string" || path.length === 0) {
+    return "/workspace";
+  }
+  if (path === "/workspace" || path.startsWith("/workspace/")) {
+    return path;
+  }
+  const normalized = path.replaceAll("\\", "/").replace(/^\/+/, "");
+  return normalized.length === 0 ? "/workspace" : `/workspace/${normalized}`;
+}
+
+function affectedPathsFromPatch(input: string) {
+  const paths = new Set<string>();
+  for (const line of input.split(/\r?\n/)) {
+    for (const marker of [
+      "*** Add File: ",
+      "*** Delete File: ",
+      "*** Update File: ",
+      "*** Move to: ",
+    ]) {
+      if (line.startsWith(marker)) {
+        paths.add(resolveWorkspacePath(line.slice(marker.length).trim()));
+      }
+    }
+  }
+  return [...paths].sort();
 }
 
 function toolCallsFromCase(parsed: OracleCase) {
@@ -515,7 +854,7 @@ function runUpstreamApplyPatchSequence(
   const byCallId = new Map<string, ApplyPatchOracleResult>();
   try {
     for (const toolCall of toolCalls) {
-      if (toolCall.name === "apply_patch") {
+      if (toolCall.name === "apply_patch" && toolCall.kind === "custom") {
         byCallId.set(
           toolCall.call_id,
           runApplyPatch(repoRoot, cwd, toolCall.input ?? ""),
@@ -593,9 +932,7 @@ function formatExecOutput(
 ) {
   const sections: string[] = [];
   sections.push(`Chunk ID: chunk-${callId}`);
-  sections.push(
-    `Wall time: ${(Number(snapshot.wall_time_ms ?? 0) / 1000).toFixed(4)} seconds`,
-  );
+  sections.push("Wall time: <seconds> seconds");
   if (snapshot.exit_code !== null && snapshot.exit_code !== undefined) {
     sections.push(`Process exited with code ${snapshot.exit_code}`);
   }
@@ -611,7 +948,30 @@ function formatExecOutput(
   sections.push(
     formattedTruncateText(output, resolveMaxTokens(maxOutputTokens)),
   );
-  return sections.join("\n");
+  return normalizeUnifiedExecOutput(sections.join("\n"));
+}
+
+function formatExecRejectedOutput(argumentsJson: string | undefined) {
+  const args = parseFunctionArguments(argumentsJson);
+  const shell = typeof args.shell === "string" ? args.shell : "/bin/sh";
+  const flag = args.login === false ? "-c" : "-lc";
+  const cmd = typeof args.cmd === "string" ? args.cmd : "";
+  const commandForDisplay = shlexJoin([shell, flag, cmd]);
+  return `exec_command failed for \`${commandForDisplay}\`: CreateProcess { message: "Rejected(\\"rejected by user\\")" }`;
+}
+
+function shlexJoin(parts: string[]) {
+  return parts.map(shlexQuote).join(" ");
+}
+
+function shlexQuote(part: string) {
+  if (part.length === 0) {
+    return "''";
+  }
+  if (/^[A-Za-z0-9/_\-.:=]+$/.test(part)) {
+    return part;
+  }
+  return `'${part.replaceAll("'", "'\"'\"'")}'`;
 }
 
 function execSnapshotOutput(snapshot: Record<string, any>) {
@@ -624,6 +984,7 @@ function execSnapshotOutput(snapshot: Record<string, any>) {
   return "";
 }
 
+const DEFAULT_YIELD_TIME_MS = 1000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const APPROX_BYTES_PER_TOKEN = 4;
 
@@ -643,6 +1004,10 @@ function formattedTruncateText(content: string, maxTokens: number) {
   }).length;
   return `Total output lines: ${totalLines}\n\n${truncateMiddleWithTokenBudget(content, maxTokens)[0]}`;
 }
+
+export const upstreamOracleSyncChecks = {
+  formattedTruncateText,
+};
 
 function truncateMiddleWithTokenBudget(
   text: string,

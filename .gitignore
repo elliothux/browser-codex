@@ -30,3 +30,7 @@ apps/web/dist/
 apps/web/public/wasm/
 test-results/
 playwright-report/
+
+**/.DS_Store
+
+.tanstack

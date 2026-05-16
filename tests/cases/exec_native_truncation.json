@@ -1,0 +1,47 @@
+{
+  "name": "exec_native_truncation",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/unified_exec.rs truncation behavior, using a deterministic shell command so native upstream core can produce the oracle trace.",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "run deterministic long command" }],
+  "execApproval": "auto",
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "exec-item",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"printf '0123456789abcdef\\\\n'\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":2}",
+          "call_id": "exec-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "native truncated" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": [
+    {
+      "wall_time_ms": 9,
+      "output": [
+        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 10
+      ],
+      "process_id": null,
+      "exit_code": 0,
+      "original_token_count": 5
+    }
+  ]
+}

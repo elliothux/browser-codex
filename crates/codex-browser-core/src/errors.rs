@@ -8,6 +8,8 @@ pub enum CoreError {
     Model(String),
     #[error("stream closed before response.completed")]
     StreamClosed,
+    #[error("turn was cancelled")]
+    Cancelled,
     #[error("tool error: {0}")]
     Tool(String),
     #[error("invalid tool arguments for {tool}: {message}")]

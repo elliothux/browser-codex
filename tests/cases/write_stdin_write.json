@@ -1,0 +1,45 @@
+{
+  "name": "write_stdin_write",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/unified_exec.rs write_stdin input behavior.",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "write stdin" }],
+  "execApproval": "auto",
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "stdin-item",
+          "name": "write_stdin",
+          "arguments": "{\"session_id\":42,\"chars\":\"yes\\n\",\"yield_time_ms\":15,\"max_output_tokens\":20}",
+          "call_id": "stdin-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "wrote" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": [
+    {
+      "wall_time_ms": 11,
+      "output": [97, 99, 99, 101, 112, 116, 101, 100, 10],
+      "process_id": 42,
+      "exit_code": null,
+      "original_token_count": 2
+    }
+  ]
+}

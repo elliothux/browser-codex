@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@browser-codex/browser-runtime": "workspace:*"
+    "@browser-codex/browser-runtime": "workspace:*",
+    "@pierre/trees": "^1.0.0-beta.3",
+    "@wterm/dom": "^0.3.0",
+    "@wterm/react": "^0.3.0"
   },
   "scripts": {
     "build": "rm -rf dist && vite build",

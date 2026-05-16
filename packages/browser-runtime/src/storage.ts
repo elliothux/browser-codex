@@ -4,7 +4,6 @@
 // wasm core's SessionSnapshot as opaque JSON.
 
 import { connect } from "@tursodatabase/database-wasm/bundle";
-import type { FileSystemTree } from "@webcontainer/api";
 import type {
   AgentTrace,
   RuntimeMessage,
@@ -20,7 +19,6 @@ type SessionRow = {
   updated_at: number;
   model: string;
   wasm_session_json: string | null;
-  workspace_snapshot_json: string | null;
 };
 
 type MessageRow = {
@@ -34,34 +32,20 @@ type MessageRow = {
 
 export class TursoConversationStore {
   private db: TursoDatabase | undefined;
+  private initPromise: Promise<void> | undefined;
 
   constructor(private readonly path: string) {}
 
   async init() {
-    const db = (this.db ??= await connect(this.path));
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        model TEXT NOT NULL,
-        wasm_session_json TEXT,
-        workspace_snapshot_json TEXT
-      );
+    this.initPromise ??= this.doInit().catch((error: unknown) => {
+      this.initPromise = undefined;
+      throw error;
+    });
+    return this.initPromise;
+  }
 
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        role TEXT NOT NULL CHECK (role IN ('assistant', 'user')),
-        text TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        trace_json TEXT
-      );
-
-      CREATE INDEX IF NOT EXISTS messages_session_created_idx
-        ON messages(session_id, created_at);
-    `);
+  private async doInit() {
+    this.db ??= await connectSharedDatabase(this.path);
   }
 
   async listSessions(): Promise<RuntimeSessionSummary[]> {
@@ -77,20 +61,18 @@ export class TursoConversationStore {
     id: string;
     title: string;
     model: string;
-    workspaceSnapshot: FileSystemTree | null;
   }): Promise<RuntimeSession> {
     const now = Date.now();
     await this.database().run(
       `INSERT INTO sessions
-        (id, title, created_at, updated_at, model, wasm_session_json, workspace_snapshot_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (id, title, created_at, updated_at, model, wasm_session_json)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       input.id,
       input.title,
       now,
       now,
       input.model,
       null,
-      encodeJson(input.workspaceSnapshot),
     );
     return {
       id: input.id,
@@ -99,7 +81,6 @@ export class TursoConversationStore {
       updatedAt: now,
       model: input.model,
       wasmSession: null,
-      workspaceSnapshot: input.workspaceSnapshot,
       messages: [],
     };
   }
@@ -118,17 +99,40 @@ export class TursoConversationStore {
     return {
       ...summaryFromRow(row),
       wasmSession: decodeJson<SessionSnapshot>(row.wasm_session_json),
-      workspaceSnapshot: decodeJson<FileSystemTree>(
-        row.workspace_snapshot_json,
-      ),
       messages,
     };
+  }
+
+  async renameSession(
+    id: string,
+    title: string,
+  ): Promise<RuntimeSessionSummary> {
+    const normalizedTitle = titleFromUserText(title);
+    const now = Date.now();
+    await this.database().run(
+      `UPDATE sessions
+       SET title = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      normalizedTitle,
+      now,
+      id,
+    );
+    const row = (await this.database().get(
+      `SELECT id, title, created_at, updated_at, model
+       FROM sessions
+       WHERE id = ?`,
+      id,
+    )) as SessionRow | undefined;
+    if (row === undefined || row === null) {
+      throw new Error(`session ${id} not found`);
+    }
+    return summaryFromRow(row);
   }
 
   async saveTurn(input: {
     session: RuntimeSession;
     wasmSession: SessionSnapshot;
-    workspaceSnapshot: FileSystemTree;
     userText: string;
     assistantText: string;
     trace: AgentTrace;
@@ -143,14 +147,12 @@ export class TursoConversationStore {
        SET title = ?,
            updated_at = ?,
            model = ?,
-           wasm_session_json = ?,
-           workspace_snapshot_json = ?
+           wasm_session_json = ?
        WHERE id = ?`,
       title,
       now,
       input.session.model,
       encodeJson(input.wasmSession),
-      encodeJson(input.workspaceSnapshot),
       input.session.id,
     );
     const userMessage = makeMessage({
@@ -173,7 +175,6 @@ export class TursoConversationStore {
       title,
       updatedAt: now,
       wasmSession: input.wasmSession,
-      workspaceSnapshot: input.workspaceSnapshot,
       messages: [...input.session.messages, userMessage, assistantMessage],
     };
   }
@@ -219,6 +220,100 @@ type TursoDatabase = {
   get: (sql: string, ...parameters: unknown[]) => Promise<unknown>;
   all: (sql: string, ...parameters: unknown[]) => Promise<unknown[]>;
 };
+
+type StorageGlobalState = {
+  __browserCodexTursoDatabases?: Map<string, Promise<TursoDatabase>>;
+};
+
+function storageGlobal() {
+  return globalThis as typeof globalThis & StorageGlobalState;
+}
+
+function connectSharedDatabase(path: string) {
+  const global = storageGlobal();
+  const databases = (global.__browserCodexTursoDatabases ??= new Map());
+  let promise = databases.get(path);
+  if (promise === undefined) {
+    promise = connect(path)
+      .then(async (db) => {
+        await initializeSchema(db);
+        return db;
+      })
+      .catch((error: unknown) => {
+        if (databases.get(path) === promise) {
+          databases.delete(path);
+        }
+        throw error;
+      });
+    databases.set(path, promise);
+  }
+  return promise;
+}
+
+async function initializeSchema(db: TursoDatabase) {
+  await migrateSessionSchema(db);
+  await db.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        model TEXT NOT NULL,
+        wasm_session_json TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('assistant', 'user')),
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        trace_json TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS messages_session_created_idx
+        ON messages(session_id, created_at);
+    `);
+}
+
+async function migrateSessionSchema(db: TursoDatabase) {
+  // Mirrors the upstream Codex persistence boundary rather than native schema:
+  // external/codex/codex-rs/core/src/rollout.rs persists conversation/session
+  // metadata, while browser workspace bytes are a runtime adapter concern.
+  // Version 2 removes workspace_snapshot_json so SQLite is not a file index or
+  // workspace blob store; OPFS owns snapshots.
+  const columns = (await db.all("PRAGMA table_info(sessions)")) as Array<{
+    name?: string;
+  }>;
+  if (!columns.some((column) => column.name === "workspace_snapshot_json")) {
+    await db.exec("PRAGMA user_version = 2;");
+    return;
+  }
+
+  await db.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    ALTER TABLE sessions RENAME TO sessions_with_workspace_snapshot;
+
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      model TEXT NOT NULL,
+      wasm_session_json TEXT
+    );
+
+    INSERT INTO sessions
+      (id, title, created_at, updated_at, model, wasm_session_json)
+    SELECT id, title, created_at, updated_at, model, wasm_session_json
+    FROM sessions_with_workspace_snapshot;
+
+    DROP TABLE sessions_with_workspace_snapshot;
+    PRAGMA user_version = 2;
+    PRAGMA foreign_keys = ON;
+  `);
+}
 
 function summaryFromRow(row: SessionRow): RuntimeSessionSummary {
   return {

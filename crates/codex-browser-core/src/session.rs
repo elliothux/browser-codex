@@ -4,6 +4,9 @@
 // services, telemetry, compaction, mailbox, and Tokio cancellation, and injects
 // runtime capabilities through host traits.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use futures::StreamExt;
 use futures::future::join_all;
 use serde::Deserialize;
@@ -74,6 +77,29 @@ pub struct TurnResult {
     pub trace: AgentTrace,
 }
 
+#[derive(Clone, Default)]
+pub struct CancellationToken {
+    cancelled: Rc<Cell<bool>>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.set(true);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.get()
+    }
+}
+
+pub trait TurnEventSink {
+    fn on_event(&self, event: &EventMsg) -> CoreResult<()>;
+}
+
 pub struct Session {
     session_id: String,
     thread_id: String,
@@ -82,6 +108,13 @@ pub struct Session {
     host: HostRuntime,
     path_policy: WorkspacePathPolicy,
     next_id: u64,
+}
+
+struct TurnRuntime<'a> {
+    router: &'a ToolRouter,
+    event_sink: Option<&'a dyn TurnEventSink>,
+    cancellation_token: &'a CancellationToken,
+    turn_id: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,12 +179,29 @@ impl Session {
     }
 
     pub async fn run_turn(&mut self, input: Vec<UserInput>) -> CoreResult<TurnResult> {
+        self.run_turn_with_event_sink(input, None, &CancellationToken::new())
+            .await
+    }
+
+    pub async fn run_turn_with_event_sink(
+        &mut self,
+        input: Vec<UserInput>,
+        event_sink: Option<&dyn TurnEventSink>,
+        cancellation_token: &CancellationToken,
+    ) -> CoreResult<TurnResult> {
         let turn_id = self.next_id("turn");
-        let mut events = vec![EventMsg::TurnStarted {
-            turn_id: turn_id.clone(),
-        }];
+        let mut events = Vec::new();
+        emit(
+            &mut events,
+            event_sink,
+            EventMsg::TurnStarted {
+                turn_id: turn_id.clone(),
+            },
+        )?;
         let mut trace = AgentTrace::default();
         let mut tool_outputs = Vec::new();
+
+        self.check_cancelled(&turn_id, &mut events, event_sink, cancellation_token)?;
 
         let user_content = input
             .into_iter()
@@ -164,13 +214,20 @@ impl Session {
         });
 
         let router = ToolRouter::builtin();
+        let runtime = TurnRuntime {
+            router: &router,
+            event_sink,
+            cancellation_token,
+            turn_id: &turn_id,
+        };
         let mut final_message = None;
         let mut client_session = self.host.model_client.new_session();
 
         for _ in 0..self.config.max_tool_iterations {
+            self.check_cancelled(&turn_id, &mut events, event_sink, cancellation_token)?;
             let sampling = self
                 .sample_with_retry(
-                    &router,
+                    &runtime,
                     &mut events,
                     &mut client_session,
                     &mut trace,
@@ -181,7 +238,13 @@ impl Session {
             final_message = sampling.final_message.or(final_message);
 
             if sampling.tool_calls.is_empty() && !sampling.needs_follow_up {
-                events.push(EventMsg::TurnComplete { turn_id });
+                emit(
+                    &mut events,
+                    event_sink,
+                    EventMsg::TurnComplete {
+                        turn_id: turn_id.clone(),
+                    },
+                )?;
                 trace.events = events.clone();
                 trace.tool_outputs = tool_outputs.clone();
                 return Ok(TurnResult {
@@ -193,9 +256,10 @@ impl Session {
             }
 
             self.dispatch_and_record_tool_calls(
-                &router,
+                runtime.router,
                 sampling.tool_calls,
                 &mut events,
+                runtime.event_sink,
                 &mut tool_outputs,
             )
             .await?;
@@ -227,11 +291,14 @@ impl Session {
         router: &ToolRouter,
         calls: Vec<ToolCall>,
         events: &mut Vec<EventMsg>,
+        event_sink: Option<&dyn TurnEventSink>,
         tool_outputs: &mut Vec<ToolOutputTrace>,
     ) -> CoreResult<()> {
         let executions = self.dispatch_tool_calls(router, calls).await?;
         for execution in executions {
-            events.extend(execution.events);
+            for event in execution.events {
+                emit(events, event_sink, event)?;
+            }
             self.history.push_input(execution.response_item);
             tool_outputs.push(execution.trace);
         }
@@ -306,31 +373,48 @@ impl Session {
 
     async fn sample_with_retry(
         &mut self,
-        router: &ToolRouter,
+        runtime: &TurnRuntime<'_>,
         events: &mut Vec<EventMsg>,
         client_session: &mut ModelClientSession,
         trace: &mut AgentTrace,
         tool_outputs: &mut Vec<ToolOutputTrace>,
     ) -> CoreResult<SamplingOutput> {
         for attempt in 0..=self.config.max_sampling_retries {
-            let prompt = self.build_prompt(router);
+            let prompt = self.build_prompt(runtime.router);
             trace.model_requests.push(prompt.clone());
             let output = self
-                .run_sampling_request(prompt, events, client_session)
+                .run_sampling_request(
+                    prompt,
+                    events,
+                    runtime.event_sink,
+                    runtime.cancellation_token,
+                    runtime.turn_id,
+                    client_session,
+                )
                 .await?;
 
             if output.completed {
                 return Ok(output);
             }
 
-            self.dispatch_and_record_tool_calls(router, output.tool_calls, events, tool_outputs)
-                .await?;
+            self.dispatch_and_record_tool_calls(
+                runtime.router,
+                output.tool_calls,
+                events,
+                runtime.event_sink,
+                tool_outputs,
+            )
+            .await?;
 
             if attempt < self.config.max_sampling_retries {
-                events.push(EventMsg::StreamError {
-                    message: "model stream closed before response.completed".to_string(),
-                    retry: attempt + 1,
-                });
+                emit(
+                    events,
+                    runtime.event_sink,
+                    EventMsg::StreamError {
+                        message: "model stream closed before response.completed".to_string(),
+                        retry: attempt + 1,
+                    },
+                )?;
             } else {
                 return Err(CoreError::StreamClosed);
             }
@@ -342,6 +426,9 @@ impl Session {
         &mut self,
         prompt: Prompt,
         events: &mut Vec<EventMsg>,
+        event_sink: Option<&dyn TurnEventSink>,
+        cancellation_token: &CancellationToken,
+        turn_id: &str,
         client_session: &mut ModelClientSession,
     ) -> CoreResult<SamplingOutput> {
         let options = ModelRequestOptions {
@@ -352,19 +439,32 @@ impl Session {
         let mut output = SamplingOutput::default();
 
         while let Some(event) = stream.next().await {
+            self.check_cancelled(turn_id, events, event_sink, cancellation_token)?;
             match event? {
                 ResponseEvent::ResponseCreated { .. } => {}
                 ResponseEvent::OutputItemAdded { item } => {
-                    events.push(EventMsg::ItemStarted {
-                        item_type: item_type(&item).to_string(),
-                    });
+                    emit(
+                        events,
+                        event_sink,
+                        EventMsg::ItemStarted {
+                            item_type: item_type(&item).to_string(),
+                        },
+                    )?;
                 }
                 ResponseEvent::OutputTextDelta { delta } => {
-                    events.push(EventMsg::AgentMessageContentDelta { delta });
+                    emit(
+                        events,
+                        event_sink,
+                        EventMsg::AgentMessageContentDelta { delta },
+                    )?;
                 }
                 ResponseEvent::ReasoningTextDelta { delta, .. }
                 | ResponseEvent::ReasoningSummaryTextDelta { delta, .. } => {
-                    events.push(EventMsg::ReasoningContentDelta { delta });
+                    emit(
+                        events,
+                        event_sink,
+                        EventMsg::ReasoningContentDelta { delta },
+                    )?;
                 }
                 ResponseEvent::OutputItemDone { item } => {
                     if let Some(call) = ToolCall::from_response_item(&item) {
@@ -373,7 +473,11 @@ impl Session {
                     if let ResponseItem::Message { content, .. } = &item {
                         output.final_message = Some(output_text(content));
                     }
-                    events.push(EventMsg::ItemCompleted { item: item.clone() });
+                    emit(
+                        events,
+                        event_sink,
+                        EventMsg::ItemCompleted { item: item.clone() },
+                    )?;
                     self.history.push_response(item);
                 }
                 ResponseEvent::ResponseCompleted { response } => {
@@ -404,6 +508,26 @@ impl Session {
         let id = self.next_id;
         self.next_id += 1;
         format!("{prefix}-{id}")
+    }
+
+    fn check_cancelled(
+        &self,
+        turn_id: &str,
+        events: &mut Vec<EventMsg>,
+        event_sink: Option<&dyn TurnEventSink>,
+        cancellation_token: &CancellationToken,
+    ) -> CoreResult<()> {
+        if !cancellation_token.is_cancelled() {
+            return Ok(());
+        }
+        emit(
+            events,
+            event_sink,
+            EventMsg::TurnCancelled {
+                turn_id: turn_id.to_string(),
+            },
+        )?;
+        Err(CoreError::Cancelled)
     }
 }
 
@@ -440,4 +564,16 @@ fn output_text(content: &[ContentItem]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn emit(
+    events: &mut Vec<EventMsg>,
+    event_sink: Option<&dyn TurnEventSink>,
+    event: EventMsg,
+) -> CoreResult<()> {
+    if let Some(event_sink) = event_sink {
+        event_sink.on_event(&event)?;
+    }
+    events.push(event);
+    Ok(())
 }

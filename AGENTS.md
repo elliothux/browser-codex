@@ -84,6 +84,13 @@ Do not mock the core behavior under test:
 
 Use two complementary test layers only.
 
+## Test-Only Changes
+
+- Do not modify production/core logic only to make tests easier to write, run, or assert.
+- Tests must exercise the same behavior and code paths used by real callers unless the boundary is explicitly a host mock boundary listed below.
+- Explicitly marked test affordances are allowed when they do not change runtime behavior, such as frontend E2E selectors (`data-testid`) or Rust inline test modules/functions gated by `#[cfg(test)]`.
+- If a test requires a hook, flag, branch, exported helper, or alternate code path in main logic, treat that as a design smell and test through an existing public or host boundary instead.
+
 ## Browser Runtime Adapter Boundary
 
 Keep browser runtime adapters in `packages/browser-runtime`, not inside the web app.
@@ -133,6 +140,7 @@ Test case policy:
 - Compare model request input history, upstream-derived full tool specs, and model capability flags such as `parallel_tool_calls` strictly in conformance tests.
 - Hand-write expected values only for browser-only adapter cases that upstream Codex cannot represent.
 - Keep browser/WebContainer/Turso/wasm-bindgen cases separate from core conformance cases.
+- Split browser app e2e by behavior instead of collecting unrelated persistence, history, and fallback checks in one large case; each default e2e case should exercise at least one tool call.
 
 Capture at least:
 
@@ -140,7 +148,7 @@ Capture at least:
 - agent events
 - tool outputs sent back to the model
 - approval requests/decisions
-- exec requests/results
+- host exec requests and model-visible exec results
 - final filesystem snapshot
 
 Canonicalize before comparing:
@@ -176,20 +184,24 @@ Use these upstream assets when designing conformance cases:
 
 ## Minimum Conformance Cases
 
-Start with:
+Start with tool-backed default cases. Do not run `no_tool` in the default
+native/e2e gate:
 
-1. no-tool assistant final
-2. streamed assistant text delta
-3. reasoning item and reasoning deltas
-4. unsupported custom tool returns model-visible error
-5. `apply_patch` add/update/delete
-6. invalid `apply_patch` returns model-visible error
-7. `exec_command` success output shape
-8. `exec_command` denied approval
-9. early stream close retry
-10. request invariant validation for tool call/output pairing
-11. early stream close after a completed tool call
-12. model capability disables `parallel_tool_calls`
+1. unsupported custom tool returns model-visible error
+2. `apply_patch` add/update/delete
+3. invalid `apply_patch` returns model-visible error
+4. `exec_command` success output shape
+5. `exec_command` denied approval
+6. request invariant validation for tool call/output pairing
+7. early stream close after a completed tool call
+8. model capability disables `parallel_tool_calls`
+9. `write_stdin` poll/write behavior
+10. client `tool_search` output behavior
+11. invalid exec args and sandbox escalation rejection
+12. exec truncation, invalid UTF-8 output, and shell/login/tty host payload
+13. streamed assistant text delta
+14. reasoning item and reasoning deltas
+15. early stream close retry
 
 ## Documentation
 

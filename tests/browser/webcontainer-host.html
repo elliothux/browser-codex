@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>webcontainer host adapter tests</title>
+  </head>
+  <body>
+    <script type="module">
+      import { WebContainer } from "@webcontainer/api";
+      import { WebContainerHostExec } from "/packages/browser-runtime/src/webcontainer-host.ts";
+
+      const decoder = new TextDecoder();
+
+      function outputText(snapshot) {
+        return decoder.decode(new Uint8Array(snapshot.output));
+      }
+
+      globalThis.runWebContainerHostExecLifecycle = async () => {
+        const webcontainer = await WebContainer.boot({
+          coep: "require-corp",
+          workdirName: `browser-codex-host-${Date.now()}`,
+        });
+        await webcontainer.mount({
+          workspace: {
+            directory: {
+              "package.json": {
+                file: {
+                  contents:
+                    '{"scripts":{"test":"node ./test.js"},"dependencies":{},"devDependencies":{}}\n',
+                },
+              },
+            },
+          },
+        });
+
+        const host = new WebContainerHostExec(webcontainer);
+        const interactiveScript =
+          "process.stdout.write('ready\\n');" +
+          "process.stdin.on('data', data => {" +
+          "const text = data.toString();" +
+          "process.stdout.write('in:' + text);" +
+          "if (text.includes('exit')) process.exit(0);" +
+          "});" +
+          "setInterval(() => {}, 1000);";
+        await webcontainer.fs.writeFile(
+          "workspace/interactive.js",
+          interactiveScript,
+        );
+
+        async function pollUntil(processId, expectedText) {
+          let output = "";
+          let lastSnapshot = null;
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            const snapshot = await host.pollOutput(processId, {
+              yield_time_ms: 100,
+              max_output_tokens: 2000,
+            });
+            lastSnapshot = snapshot;
+            output += outputText(snapshot);
+            if (output.includes(expectedText)) {
+              return { output, snapshot };
+            }
+          }
+          return { output, snapshot: lastSnapshot };
+        }
+
+        const started = await host.start({
+          cmd: "node interactive.js",
+          workdir: "/workspace",
+          login: true,
+          yield_time_ms: 200,
+          max_output_tokens: 2000,
+          tty: false,
+        });
+        if (started.process_id === null || started.process_id === undefined) {
+          throw new Error("interactive process did not stay running");
+        }
+        const ready = await pollUntil(started.process_id, "ready");
+
+        const wrote = await host.writeStdin(started.process_id, "hello\n", {
+          yield_time_ms: 200,
+          max_output_tokens: 2000,
+        });
+        const wroteMore = outputText(wrote).includes("in:hello")
+          ? { output: "", snapshot: null }
+          : await pollUntil(started.process_id, "in:hello");
+        const exited = await host.writeStdin(started.process_id, "exit\n", {
+          yield_time_ms: 500,
+          max_output_tokens: 2000,
+        });
+        let exitOutput = outputText(exited);
+        let exitProcessId = exited.process_id;
+        let exitCode = exited.exit_code;
+        for (let attempt = 0; exitCode === null && attempt < 20; attempt += 1) {
+          const snapshot = await host.pollOutput(started.process_id, {
+            yield_time_ms: 100,
+            max_output_tokens: 2000,
+          });
+          exitOutput += outputText(snapshot);
+          exitProcessId = snapshot.process_id;
+          exitCode = snapshot.exit_code;
+        }
+        let pollAfterExitError = "";
+        try {
+          await host.pollOutput(started.process_id, {
+            yield_time_ms: 10,
+            max_output_tokens: 2000,
+          });
+        } catch (error) {
+          pollAfterExitError =
+            error instanceof Error ? error.message : String(error);
+        }
+
+        const ttyScript =
+          "process.stdout.write('tty-ready\\n');" +
+          "setInterval(() => {}, 1000);";
+        await webcontainer.fs.writeFile("workspace/tty.js", ttyScript);
+        const tty = await host.start({
+          cmd: "node tty.js",
+          workdir: "/workspace",
+          login: true,
+          yield_time_ms: 200,
+          max_output_tokens: 2000,
+          tty: true,
+          terminal_size: { cols: 80, rows: 24 },
+        });
+        if (tty.process_id === null || tty.process_id === undefined) {
+          throw new Error("tty process did not stay running");
+        }
+        const ttyReady = await pollUntil(tty.process_id, "tty-ready");
+        await host.resize(tty.process_id, { cols: 100, rows: 30 });
+        await host.kill(tty.process_id);
+        let pollAfterKillError = "";
+        try {
+          await host.pollOutput(tty.process_id, {
+            yield_time_ms: 10,
+            max_output_tokens: 2000,
+          });
+        } catch (error) {
+          pollAfterKillError =
+            error instanceof Error ? error.message : String(error);
+        }
+
+        return {
+          started: {
+            output: outputText(started) + ready.output,
+            process_id: started.process_id,
+            exit_code: started.exit_code,
+          },
+          wrote: {
+            output: outputText(wrote) + wroteMore.output,
+            process_id: wrote.process_id,
+            exit_code: wrote.exit_code,
+          },
+          exited: {
+            output: exitOutput,
+            process_id: exitProcessId,
+            exit_code: exitCode,
+          },
+          pollAfterExitError,
+          tty: {
+            output: outputText(tty) + ttyReady.output,
+            process_id: tty.process_id,
+            exit_code: tty.exit_code,
+          },
+          pollAfterKillError,
+        };
+      };
+    </script>
+  </body>
+</html>

@@ -1,0 +1,39 @@
+{
+  "name": "exec_unsupported_sandbox_permissions",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/unified_exec.rs sandbox/escalation argument surface; browser core rejects native sandbox escalation at the host boundary.",
+  "initialFiles": [],
+  "userInput": [
+    { "type": "text", "text": "call exec with sandbox escalation" }
+  ],
+  "execApproval": "auto",
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "exec-item",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"printf hi\",\"sandbox_permissions\":\"require_escalated\",\"justification\":\"test\"}",
+          "call_id": "exec-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "unsupported" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

@@ -1,5 +1,6 @@
 {
   "name": "apply_patch_add_update_delete",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/apply_patch_cli.rs freeform apply_patch add/update/delete behavior and external/codex/codex-rs/apply-patch/tests/fixtures/scenarios.",
   "initialFiles": [
     { "path": "/workspace/modify.txt", "text": "line1\nline2\n" },
     { "path": "/workspace/delete.txt", "text": "obsolete\n" }

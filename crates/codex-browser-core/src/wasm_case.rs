@@ -7,10 +7,12 @@ use futures::stream;
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
+use wasm_bindgen_futures::spawn_local;
 
 use crate::approval::{
     ApplyPatchApprovalRequest, ApprovalDecision, ExecApprovalRequest, HostApprovals,
@@ -25,7 +27,9 @@ use crate::host::{
 use crate::models::{
     ModelRequestOptions, Prompt, ResponseEnvelope, ResponseEvent, ResponseItem, UserInput,
 };
-use crate::session::{CoreConfig, ExecApprovalMode, Session, SessionSnapshot};
+use crate::session::{
+    CancellationToken, CoreConfig, ExecApprovalMode, Session, SessionSnapshot, TurnEventSink,
+};
 use crate::trace::FileSnapshotEntry;
 
 #[wasm_bindgen]
@@ -91,6 +95,16 @@ struct ProviderConfig {
     base_url: String,
     api_key: String,
     model: String,
+    #[serde(default)]
+    tool_compatibility: ProviderToolCompatibility,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum ProviderToolCompatibility {
+    #[default]
+    Upstream,
+    ApplyPatchFunction,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,13 +151,67 @@ pub async fn run_host_turn_json(run_json: String, host: JsValue) -> Result<Strin
         .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
+#[wasm_bindgen]
+pub fn run_host_turn_stream_json(run_json: String, host: JsValue) -> Result<JsValue, JsValue> {
+    // Browser streaming adapter for upstream Codex event emission:
+    // external/codex/codex-rs/core/src/codex.rs emits EventMsg values while a
+    // turn is still running. Divergence: wasm exposes those values through a
+    // ReadableStream object and uses stream cancellation as the cancellation
+    // token instead of Tokio AbortHandle.
+    let source = Object::new();
+    let cancellation_token = CancellationToken::new();
+
+    let start_token = cancellation_token.clone();
+    let start_run_json = run_json.clone();
+    let start_host = host.clone();
+    let start = Closure::<dyn FnMut(JsValue)>::new(move |controller| {
+        let sink = JsReadableStreamSink::new(controller);
+        let run_json = start_run_json.clone();
+        let host = start_host.clone();
+        let token = start_token.clone();
+        spawn_local(async move {
+            let result =
+                run_host_turn_stream_json_inner(run_json, host, sink.clone(), token.clone()).await;
+            match result {
+                Ok(output) => {
+                    let _ = sink.enqueue_json(&json!({
+                        "type": "done",
+                        "output": serde_json::from_str::<Value>(&output)
+                            .unwrap_or_else(|_| Value::String(output)),
+                    }));
+                    let _ = sink.close();
+                }
+                Err(CoreError::Cancelled) => {
+                    let _ = sink.enqueue_json(&json!({ "type": "cancelled" }));
+                    let _ = sink.close();
+                }
+                Err(error) => {
+                    let _ = sink.error(&error.to_string());
+                }
+            }
+        });
+    });
+    Reflect::set(&source, &JsValue::from_str("start"), start.as_ref())
+        .map_err(|error| JsValue::from_str(&js_value_to_string(error)))?;
+    start.forget();
+
+    let cancel = Closure::<dyn FnMut(JsValue)>::new(move |_reason| {
+        cancellation_token.cancel();
+    });
+    Reflect::set(&source, &JsValue::from_str("cancel"), cancel.as_ref())
+        .map_err(|error| JsValue::from_str(&js_value_to_string(error)))?;
+    cancel.forget();
+
+    new_readable_stream(source.as_ref())
+}
+
 async fn run_case_json_inner(case_json: String) -> CoreResult<String> {
     let case: WasmCase = serde_json::from_str(&case_json)?;
     let fs = Rc::new(MemoryFs::new(case.initial_files));
     let model = Rc::new(ScriptedModel::new(case.model_responses));
     let exec = Rc::new(ScriptedExec::new(case.exec));
     let approvals = Rc::new(ScriptedApprovals::new(case.approvals));
-    let host = HostRuntime::new(model, fs.clone(), exec, approvals);
+    let host = HostRuntime::new(model, fs.clone(), exec.clone(), approvals.clone());
 
     let mut config = CoreConfig {
         require_patch_approval: case.require_patch_approval,
@@ -160,6 +228,8 @@ async fn run_case_json_inner(case_json: String) -> CoreResult<String> {
     let mut result = session.run_turn(case.user_input).await?;
     result.trace.final_files = fs.snapshot_text();
     result.trace.tool_outputs = result.tool_outputs.clone();
+    result.trace.exec = exec.trace();
+    result.trace.approvals = approvals.trace();
     serde_json::to_string(&result.trace).map_err(CoreError::from)
 }
 
@@ -169,7 +239,7 @@ async fn run_live_json_inner(run_json: String) -> CoreResult<String> {
     let model = Rc::new(LiveResponsesModel::new(run.provider));
     let exec = Rc::new(ScriptedExec::new(Vec::new()));
     let approvals = Rc::new(ScriptedApprovals::new(run.approvals));
-    let host = HostRuntime::new(model, fs.clone(), exec, approvals);
+    let host = HostRuntime::new(model, fs.clone(), exec.clone(), approvals.clone());
 
     let mut config = CoreConfig {
         require_patch_approval: run.require_patch_approval,
@@ -187,6 +257,8 @@ async fn run_live_json_inner(run_json: String) -> CoreResult<String> {
     let mut result = session.run_turn(run.user_input).await?;
     result.trace.final_files = fs.snapshot_text();
     result.trace.tool_outputs = result.tool_outputs.clone();
+    result.trace.exec = exec.trace();
+    result.trace.approvals = approvals.trace();
     serde_json::to_string(&result.trace).map_err(CoreError::from)
 }
 
@@ -228,6 +300,85 @@ async fn run_host_turn_json_inner(run_json: String, host: JsValue) -> CoreResult
         events: result.events,
     };
     serde_json::to_string(&output).map_err(CoreError::from)
+}
+
+async fn run_host_turn_stream_json_inner(
+    run_json: String,
+    host: JsValue,
+    event_sink: JsReadableStreamSink,
+    cancellation_token: CancellationToken,
+) -> CoreResult<String> {
+    // Mirrors run_host_turn_json_inner; only event delivery/cancellation differ.
+    let run: WasmHostTurn = serde_json::from_str(&run_json)?;
+    let fs = Rc::new(JsHostFileSystem::new(required_child(&host, "fs")?));
+    let exec = Rc::new(JsHostExec::new(required_child(&host, "exec")?));
+    let approvals = Rc::new(JsHostApprovals::new(required_child(&host, "approvals")?));
+    let model = Rc::new(LiveResponsesModel::new(run.provider));
+    let host_runtime = HostRuntime::new(model, fs.clone(), exec, approvals);
+
+    let mut config = CoreConfig {
+        require_patch_approval: run.require_patch_approval,
+        exec_approval: ExecApprovalMode::Ask,
+        ..CoreConfig::default()
+    };
+    if let Some(exec_approval) = run.exec_approval {
+        config.exec_approval = exec_approval;
+    }
+    if let Some(supports_parallel_tool_calls) = run.supports_parallel_tool_calls {
+        config.supports_parallel_tool_calls = supports_parallel_tool_calls;
+    }
+
+    let mut session = match run.session {
+        Some(snapshot) => Session::from_snapshot(config, host_runtime, snapshot)?,
+        None => Session::new(config, host_runtime)?,
+    };
+    let mut result = session
+        .run_turn_with_event_sink(run.user_input, Some(&event_sink), &cancellation_token)
+        .await?;
+    result.trace.final_files = fs.snapshot_text().await?;
+    result.trace.tool_outputs = result.tool_outputs.clone();
+    let output = HostTurnOutput {
+        assistant_text: result.final_message,
+        session: session.snapshot(),
+        trace: result.trace,
+        events: result.events,
+    };
+    serde_json::to_string(&output).map_err(CoreError::from)
+}
+
+#[derive(Clone)]
+struct JsReadableStreamSink {
+    controller: JsValue,
+}
+
+impl JsReadableStreamSink {
+    fn new(controller: JsValue) -> Self {
+        Self { controller }
+    }
+
+    fn enqueue_json(&self, value: &Value) -> CoreResult<()> {
+        let serialized = serde_json::to_string(value)?;
+        let chunk = js_sys::JSON::parse(&serialized)
+            .map_err(|error| CoreError::Serialization(js_value_to_string(error)))?;
+        call_sync_method(&self.controller, "enqueue", vec![chunk])?;
+        Ok(())
+    }
+
+    fn close(&self) -> CoreResult<()> {
+        call_sync_method(&self.controller, "close", Vec::new())?;
+        Ok(())
+    }
+
+    fn error(&self, message: &str) -> CoreResult<()> {
+        call_sync_method(&self.controller, "error", vec![JsValue::from_str(message)])?;
+        Ok(())
+    }
+}
+
+impl TurnEventSink for JsReadableStreamSink {
+    fn on_event(&self, event: &EventMsg) -> CoreResult<()> {
+        self.enqueue_json(&json!({ "type": "event", "event": event }))
+    }
 }
 
 struct JsHostFileSystem {
@@ -455,6 +606,27 @@ async fn call_js_method(target: &JsValue, name: &str, args: Vec<JsValue>) -> Cor
         .map_err(|error| CoreError::Serialization(js_value_to_string(error)))
 }
 
+fn call_sync_method(target: &JsValue, name: &str, args: Vec<JsValue>) -> CoreResult<JsValue> {
+    let method = Reflect::get(target, &JsValue::from_str(name))
+        .map_err(|error| CoreError::Serialization(js_value_to_string(error)))?
+        .dyn_into::<Function>()
+        .map_err(|_| CoreError::Serialization(format!("host method '{name}' is not a function")))?;
+    let js_args = Array::new();
+    for arg in args {
+        js_args.push(&arg);
+    }
+    method
+        .apply(target, &js_args)
+        .map_err(|error| CoreError::Serialization(js_value_to_string(error)))
+}
+
+fn new_readable_stream(source: &JsValue) -> Result<JsValue, JsValue> {
+    let constructor = Function::new_with_args("source", "return new ReadableStream(source);");
+    constructor
+        .call1(&JsValue::NULL, source)
+        .map_err(|error| JsValue::from_str(&js_value_to_string(error)))
+}
+
 fn serde_to_js_value<T: Serialize>(value: &T) -> CoreResult<JsValue> {
     serde_wasm_bindgen::to_value(value).map_err(|error| CoreError::Serialization(error.to_string()))
 }
@@ -512,8 +684,8 @@ impl LiveResponsesModel {
 struct ResponsesRequest<'a> {
     model: &'a str,
     instructions: &'a str,
-    input: &'a [crate::models::PromptItem],
-    tools: &'a [crate::tools::ToolSpec],
+    input: Value,
+    tools: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'a str>,
     parallel_tool_calls: bool,
@@ -536,8 +708,8 @@ impl ModelTransport for LiveResponsesModel {
         let request = ResponsesRequest {
             model: &self.provider.model,
             instructions: &prompt.instructions,
-            input: &prompt.input,
-            tools: &prompt.tools,
+            input: provider_prompt_input(&prompt, self.provider.tool_compatibility)?,
+            tools: provider_tools(&prompt, self.provider.tool_compatibility)?,
             tool_choice: options.tool_choice.as_deref(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             stream: false,
@@ -549,8 +721,103 @@ impl ModelTransport for LiveResponsesModel {
             &body,
         )
         .await?;
-        let events = response_value_to_events(response_value)?;
+        let events = response_value_to_events(response_value, self.provider.tool_compatibility)?;
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
+    }
+}
+
+fn provider_prompt_input(
+    prompt: &Prompt,
+    compatibility: ProviderToolCompatibility,
+) -> CoreResult<Value> {
+    let mut input = serde_json::to_value(&prompt.input)?;
+    if compatibility == ProviderToolCompatibility::ApplyPatchFunction {
+        rewrite_apply_patch_prompt_items(&mut input);
+    }
+    Ok(input)
+}
+
+fn provider_tools(prompt: &Prompt, compatibility: ProviderToolCompatibility) -> CoreResult<Value> {
+    let mut tools = serde_json::to_value(&prompt.tools)?;
+    if compatibility == ProviderToolCompatibility::ApplyPatchFunction {
+        rewrite_apply_patch_tool_specs(&mut tools);
+    }
+    Ok(tools)
+}
+
+fn rewrite_apply_patch_tool_specs(tools: &mut Value) {
+    // Provider compatibility fallback for OpenAI-compatible Responses APIs that
+    // reject upstream custom/freeform tools. Upstream conformance still uses
+    // external/codex/codex-rs/core/src/tools/handlers/apply_patch_spec.rs as a
+    // custom tool; only this live provider adapter rewrites the wire shape.
+    let Some(items) = tools.as_array_mut() else {
+        return;
+    };
+    for item in items {
+        if item.get("type").and_then(Value::as_str) == Some("custom")
+            && item.get("name").and_then(Value::as_str) == Some("apply_patch")
+        {
+            *item = json!({
+                "type": "function",
+                "name": "apply_patch",
+                "description": "Use the apply_patch tool to edit files. Provide the full patch text in the patch field using the upstream apply_patch grammar.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "patch": {
+                            "type": "string",
+                            "description": "Full apply_patch patch text."
+                        }
+                    },
+                    "required": ["patch"],
+                    "additionalProperties": false
+                }
+            });
+        }
+    }
+}
+
+fn rewrite_apply_patch_prompt_items(input: &mut Value) {
+    let Some(items) = input.as_array_mut() else {
+        return;
+    };
+    for item in items {
+        if item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+            && item.get("name").and_then(Value::as_str) == Some("apply_patch")
+        {
+            let Some(call_id) = item.get("call_id").cloned() else {
+                continue;
+            };
+            let Some(input_text) = item.get("input").and_then(Value::as_str) else {
+                continue;
+            };
+            let mut replacement = Map::new();
+            replacement.insert(
+                "type".to_string(),
+                Value::String("function_call".to_string()),
+            );
+            if let Some(id) = item.get("id").cloned() {
+                replacement.insert("id".to_string(), id);
+            }
+            replacement.insert("call_id".to_string(), call_id);
+            replacement.insert("name".to_string(), Value::String("apply_patch".to_string()));
+            replacement.insert(
+                "arguments".to_string(),
+                Value::String(json!({ "patch": input_text }).to_string()),
+            );
+            *item = Value::Object(replacement);
+        } else if item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+            && item.get("name").and_then(Value::as_str) == Some("apply_patch")
+        {
+            if let Some(object) = item.as_object_mut() {
+                object.insert(
+                    "type".to_string(),
+                    Value::String("function_call_output".to_string()),
+                );
+                object.remove("name");
+            }
+        }
     }
 }
 
@@ -630,7 +897,10 @@ fn js_response_json(value: &JsValue) -> CoreResult<Promise> {
         .map_err(|_| CoreError::Model("Response.json() did not return a Promise".to_string()))
 }
 
-fn response_value_to_events(response: Value) -> CoreResult<Vec<ResponseEvent>> {
+fn response_value_to_events(
+    response: Value,
+    compatibility: ProviderToolCompatibility,
+) -> CoreResult<Vec<ResponseEvent>> {
     let response_id = response
         .get("id")
         .and_then(Value::as_str)
@@ -647,8 +917,12 @@ fn response_value_to_events(response: Value) -> CoreResult<Vec<ResponseEvent>> {
 
     if let Some(output) = response.get("output").and_then(Value::as_array) {
         for item in output {
+            let mut item = item.clone();
+            if compatibility == ProviderToolCompatibility::ApplyPatchFunction {
+                rewrite_provider_apply_patch_function_call(&mut item)?;
+            }
             let parsed =
-                serde_json::from_value::<ResponseItem>(item.clone()).unwrap_or(ResponseItem::Other);
+                serde_json::from_value::<ResponseItem>(item).unwrap_or(ResponseItem::Other);
             events.push(ResponseEvent::OutputItemDone { item: parsed });
         }
     } else if let Some(text) = response.get("output_text").and_then(Value::as_str) {
@@ -665,6 +939,57 @@ fn response_value_to_events(response: Value) -> CoreResult<Vec<ResponseEvent>> {
 
     events.push(ResponseEvent::ResponseCompleted { response: envelope });
     Ok(events)
+}
+
+fn rewrite_provider_apply_patch_function_call(item: &mut Value) -> CoreResult<()> {
+    if item.get("type").and_then(Value::as_str) != Some("function_call")
+        || item.get("name").and_then(Value::as_str) != Some("apply_patch")
+    {
+        return Ok(());
+    }
+    let call_id = item
+        .get("call_id")
+        .cloned()
+        .ok_or_else(|| CoreError::Model("apply_patch function call missing call_id".to_string()))?;
+    let arguments = item
+        .get("arguments")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CoreError::Model("apply_patch function call missing arguments".to_string())
+        })?;
+    let input = apply_patch_function_arguments(arguments)?;
+    let mut replacement = Map::new();
+    replacement.insert(
+        "type".to_string(),
+        Value::String("custom_tool_call".to_string()),
+    );
+    if let Some(id) = item.get("id").cloned() {
+        replacement.insert("id".to_string(), id);
+    }
+    replacement.insert("status".to_string(), Value::String("completed".to_string()));
+    replacement.insert("call_id".to_string(), call_id);
+    replacement.insert("name".to_string(), Value::String("apply_patch".to_string()));
+    replacement.insert("input".to_string(), Value::String(input));
+    *item = Value::Object(replacement);
+    Ok(())
+}
+
+fn apply_patch_function_arguments(arguments: &str) -> CoreResult<String> {
+    let value = serde_json::from_str::<Value>(arguments).map_err(|error| {
+        CoreError::Model(format!(
+            "apply_patch function arguments must be JSON: {error}"
+        ))
+    })?;
+    value
+        .get("patch")
+        .or_else(|| value.get("input"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CoreError::Model(
+                "apply_patch function arguments must include a string patch field".to_string(),
+            )
+        })
 }
 
 fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
@@ -832,19 +1157,32 @@ impl HostFileSystem for MemoryFs {
 
 struct ScriptedExec {
     snapshots: RefCell<VecDeque<ExecOutputSnapshot>>,
+    trace: RefCell<Vec<Value>>,
 }
 
 impl ScriptedExec {
     fn new(snapshots: Vec<ExecOutputSnapshot>) -> Self {
         Self {
             snapshots: RefCell::new(snapshots.into()),
+            trace: RefCell::new(Vec::new()),
         }
+    }
+
+    fn trace(&self) -> Vec<Value> {
+        self.trace.borrow().clone()
     }
 }
 
 #[async_trait(?Send)]
 impl HostExec for ScriptedExec {
-    async fn start(&self, _request: ExecRequest) -> CoreResult<ExecOutputSnapshot> {
+    async fn start(&self, request: ExecRequest) -> CoreResult<ExecOutputSnapshot> {
+        // Scripted host boundary for conformance traces. Mirrors the upstream
+        // test harness capture style in
+        // external/codex/codex-rs/core/tests/common/responses.rs while keeping
+        // process execution injected instead of mocking Codex tool behavior.
+        self.trace
+            .borrow_mut()
+            .push(json!({ "type": "exec_command", "request": request }));
         self.snapshots
             .borrow_mut()
             .pop_front()
@@ -853,10 +1191,16 @@ impl HostExec for ScriptedExec {
 
     async fn write_stdin(
         &self,
-        _process_id: i32,
-        _input: String,
-        _options: OutputPollOptions,
+        process_id: i32,
+        input: String,
+        options: OutputPollOptions,
     ) -> CoreResult<ExecOutputSnapshot> {
+        self.trace.borrow_mut().push(json!({
+            "type": "write_stdin",
+            "process_id": process_id,
+            "input": input,
+            "options": options,
+        }));
         self.snapshots
             .borrow_mut()
             .pop_front()
@@ -865,26 +1209,40 @@ impl HostExec for ScriptedExec {
 
     async fn poll_output(
         &self,
-        _process_id: i32,
-        _options: OutputPollOptions,
+        process_id: i32,
+        options: OutputPollOptions,
     ) -> CoreResult<ExecOutputSnapshot> {
+        self.trace.borrow_mut().push(json!({
+            "type": "poll_output",
+            "process_id": process_id,
+            "options": options,
+        }));
         self.snapshots
             .borrow_mut()
             .pop_front()
             .ok_or_else(|| CoreError::Exec("no scripted poll snapshot".to_string()))
     }
 
-    async fn kill(&self, _process_id: i32) -> CoreResult<()> {
+    async fn kill(&self, process_id: i32) -> CoreResult<()> {
+        self.trace
+            .borrow_mut()
+            .push(json!({ "type": "kill", "process_id": process_id }));
         Ok(())
     }
 
-    async fn resize(&self, _process_id: i32, _size: TerminalSize) -> CoreResult<()> {
+    async fn resize(&self, process_id: i32, size: TerminalSize) -> CoreResult<()> {
+        self.trace.borrow_mut().push(json!({
+            "type": "resize",
+            "process_id": process_id,
+            "size": size,
+        }));
         Ok(())
     }
 }
 
 struct ScriptedApprovals {
     decision: ApprovalDecision,
+    trace: RefCell<Vec<Value>>,
 }
 
 impl ScriptedApprovals {
@@ -893,17 +1251,36 @@ impl ScriptedApprovals {
             ApprovalScript::Allow => ApprovalDecision::approved(),
             ApprovalScript::Deny => ApprovalDecision::denied("scripted denial"),
         };
-        Self { decision }
+        Self {
+            decision,
+            trace: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn trace(&self) -> Vec<Value> {
+        self.trace.borrow().clone()
     }
 }
 
 #[async_trait(?Send)]
 impl HostApprovals for ScriptedApprovals {
-    async fn approve_exec(&self, _request: ExecApprovalRequest) -> ApprovalDecision {
-        self.decision.clone()
+    async fn approve_exec(&self, request: ExecApprovalRequest) -> ApprovalDecision {
+        let decision = self.decision.clone();
+        self.trace.borrow_mut().push(json!({
+            "type": "exec",
+            "request": request,
+            "decision": decision.clone(),
+        }));
+        decision
     }
 
-    async fn approve_patch(&self, _request: ApplyPatchApprovalRequest) -> ApprovalDecision {
-        self.decision.clone()
+    async fn approve_patch(&self, request: ApplyPatchApprovalRequest) -> ApprovalDecision {
+        let decision = self.decision.clone();
+        self.trace.borrow_mut().push(json!({
+            "type": "apply_patch",
+            "request": request,
+            "decision": decision.clone(),
+        }));
+        decision
     }
 }

@@ -105,16 +105,28 @@ Current host boundaries:
 - `HostApprovals` calls the web UI approval handler and returns the decision
   to the wasm core.
 - `HostStorage` is implemented with Turso browser SQLite and persists the wasm
-  `SessionSnapshot`, transcript messages, and WebContainer workspace snapshots.
+  `SessionSnapshot`, transcript messages, and trace metadata only.
+- Workspace snapshots are exported from WebContainer as binary `.wcsnap` bytes
+  and stored under OPFS at
+  `/browser-codex/workspaces/<session-id>/latest.wcsnap`. OPFS is the only
+  workspace snapshot source of truth; SQLite does not store workspace blobs,
+  file manifests, or snapshot references.
+- `BrowserCodexRuntime.loadSession` serializes workspace restores because
+  upstream rollout/session reconstruction in
+  `external/codex/codex-rs/core/src/rollout.rs` does not remount one mutable
+  WebContainer workspace while history selection is changing.
 - Model HTTP transport is still the wasm live provider adapter, but
   `packages/browser-runtime` installs the original browser `fetch` before
   WebContainer boots so WebContainer fetch interception does not affect model
   requests.
 
-The default web e2e now verifies the full browser loop: real wasm turn
-execution, WebContainer command execution, `apply_patch` file mutation,
-approval UI, Turso-backed session restore, history list rendering, and a
-follow-up turn after reload using the restored workspace.
+The default web e2e now verifies the full browser loop through separate cases:
+real wasm turn execution, WebContainer command execution, `apply_patch` file
+mutation, approval UI, Turso-backed session restore, OPFS workspace restore,
+nested directory and large text snapshot restore, deleted file restore, history
+list selection across multiple sessions, corrupt/missing snapshot fallback, and
+follow-up turns after reload using the restored workspace. Each web e2e case
+starts from at least one tool call.
 
 ### `codex-browser-core.wasm`
 
@@ -270,6 +282,7 @@ User prompt
   -> OpenAI-compatible Responses API
   -> streamed model events
   -> codex-browser-core.wasm
+  -> ReadableStream turn events to Browser UI
   -> tool call
   -> approval UI if needed
   -> HostFileSystem or HostExec

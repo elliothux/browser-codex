@@ -1,0 +1,45 @@
+{
+  "name": "exec_invalid_utf8",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/unified_exec.rs output decoding behavior; browser host output bytes are decoded lossily like upstream unified exec display.",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "run invalid utf8 output" }],
+  "execApproval": "auto",
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "exec-item",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"printf invalid-bytes\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
+          "call_id": "exec-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "invalid utf8 handled" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": [
+    {
+      "wall_time_ms": 5,
+      "output": [255, 254, 65, 10],
+      "process_id": null,
+      "exit_code": 0,
+      "original_token_count": 1
+    }
+  ]
+}

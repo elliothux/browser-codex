@@ -4,7 +4,10 @@ export type ProviderConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  toolCompatibility?: "upstream" | "applyPatchFunction";
 };
+
+export type RuntimePermissionMode = "default" | "auto-review" | "full-access";
 
 export type UserInput = {
   type: "text";
@@ -80,6 +83,10 @@ export type HostTurnOutput = {
 export type WasmCodexModule = {
   default: (input?: string | { module_or_path: string }) => Promise<void>;
   run_host_turn_json: (runJson: string, host: unknown) => Promise<string>;
+  run_host_turn_stream_json?: (
+    runJson: string,
+    host: unknown,
+  ) => ReadableStream<WasmTurnStreamChunk>;
 };
 
 export type RuntimeSessionSummary = {
@@ -101,7 +108,7 @@ export type RuntimeMessage = {
 
 export type RuntimeSession = RuntimeSessionSummary & {
   wasmSession: SessionSnapshot | null;
-  workspaceSnapshot: FileSystemTree | null;
+  workspaceRestoreError?: string;
   messages: RuntimeMessage[];
 };
 
@@ -109,6 +116,33 @@ export type RuntimeTurnResult = {
   session: RuntimeSession;
   assistantText: string;
   trace: AgentTrace;
+};
+
+export type WasmTurnStreamChunk =
+  | {
+      type: "event";
+      event: Record<string, unknown>;
+    }
+  | {
+      type: "done";
+      output: HostTurnOutput;
+    }
+  | {
+      type: "cancelled";
+    };
+
+export type RuntimeTurnStreamEvent =
+  | {
+      type: "event";
+      event: Record<string, unknown>;
+    }
+  | {
+      type: "done";
+      result: RuntimeTurnResult;
+    };
+
+export type RuntimeTurnOptions = {
+  permissionMode?: RuntimePermissionMode;
 };
 
 export type ExecOutputSnapshot = {
@@ -142,4 +176,18 @@ export type BrowserCodexRuntimeOptions = {
   databasePath?: string;
   approvalHandler: ApprovalHandler;
   initialWorkspace?: FileSystemTree;
+};
+
+export type WorkspaceDirectoryEntry = {
+  kind: "directory" | "file";
+  name: string;
+  path: string;
+};
+
+export type RuntimeTerminalSession = {
+  readonly exit: Promise<number>;
+  readonly output: ReadableStream<string>;
+  kill: () => void;
+  resize: (size: { cols: number; rows: number }) => void;
+  write: (data: string) => Promise<void>;
 };

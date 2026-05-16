@@ -11,6 +11,7 @@ pub mod events;
 pub mod history;
 pub mod host;
 pub mod models;
+mod output_truncation;
 pub mod path;
 pub mod session;
 pub mod tools;
@@ -37,7 +38,10 @@ pub use models::{
     ResponseItem, UserInput,
 };
 pub use path::{ResolvedPath, WorkspacePathPolicy};
-pub use session::{CoreConfig, ExecApprovalMode, Session, SessionSnapshot, TurnResult};
+pub use session::{
+    CancellationToken, CoreConfig, ExecApprovalMode, Session, SessionSnapshot, TurnEventSink,
+    TurnResult,
+};
 pub use tools::{ToolCall, ToolOutputTrace, ToolPayload, ToolRegistry, ToolRouter, ToolSpec};
 
 #[cfg(target_arch = "wasm32")]

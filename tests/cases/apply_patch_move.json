@@ -1,0 +1,37 @@
+{
+  "name": "apply_patch_move",
+  "source": "Derived from external/codex/codex-rs/apply-patch/tests/fixtures/scenarios move/update behavior.",
+  "initialFiles": [{ "path": "/workspace/old.txt", "text": "old\n" }],
+  "userInput": [{ "type": "text", "text": "move the file" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "custom_tool_call",
+          "id": "apply-item",
+          "status": "completed",
+          "call_id": "apply-1",
+          "name": "apply_patch",
+          "input": "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-old\n+new\n*** End Patch"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "moved" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

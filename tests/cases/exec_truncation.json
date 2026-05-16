@@ -1,0 +1,52 @@
+{
+  "name": "exec_truncation",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/unified_exec.rs exec_command_reports_chunk_and_exit_metadata truncation behavior.",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "run long output" }],
+  "execApproval": "auto",
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "exec-item",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"printf long\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":6}",
+          "call_id": "exec-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "truncated" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": [
+    {
+      "wall_time_ms": 9,
+      "output": [
+        116, 111, 107, 101, 110, 32, 111, 110, 101, 32, 116, 111, 107, 101, 110,
+        32, 116, 119, 111, 32, 116, 111, 107, 101, 110, 32, 116, 104, 114, 101,
+        101, 32, 116, 111, 107, 101, 110, 32, 102, 111, 117, 114, 32, 116, 111,
+        107, 101, 110, 32, 102, 105, 118, 101, 32, 116, 111, 107, 101, 110, 32,
+        115, 105, 120, 32, 116, 111, 107, 101, 110, 32, 115, 101, 118, 101, 110,
+        10
+      ],
+      "process_id": null,
+      "exit_code": 0,
+      "original_token_count": 18
+    }
+  ]
+}

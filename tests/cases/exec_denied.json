@@ -1,5 +1,6 @@
 {
   "name": "exec_denied",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/approvals.rs exec approval denial and unified_exec exec_command error output.",
   "initialFiles": [],
   "userInput": [{ "type": "text", "text": "run command" }],
   "execApproval": "ask",

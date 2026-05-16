@@ -6,7 +6,8 @@
     "packages/*"
   ],
   "scripts": {
-    "check": "bun run format:check && bun run typecheck && bun run lint",
+    "check": "bun run format:check && bun run typecheck && bun run lint && bun run check:upstream-sync",
+    "check:upstream-sync": "bun run ./scripts/check-upstream-sync.ts",
     "check:staged": "lint-staged",
     "format": "prettier --write --log-level warn . && cargo fmt --all",
     "format:check": "prettier --check --log-level warn . && cargo fmt --all --check",

@@ -14,6 +14,9 @@ use crate::models::{
     ContentItem, FunctionCallOutputBody, FunctionCallOutputContentItem, FunctionCallOutputPayload,
     PromptItem, ResponseInputItem, ResponseItem,
 };
+use crate::output_truncation::{
+    TruncationPolicy, truncate_function_output_items_with_policy, truncate_text,
+};
 
 const IMAGE_CONTENT_OMITTED_PLACEHOLDER: &str =
     "image content omitted because you do not support image input";
@@ -202,13 +205,18 @@ fn truncate_function_outputs(items: &mut [PromptItem], max_output_bytes: usize) 
     if max_output_bytes == usize::MAX {
         return;
     }
+    // Mirrors upstream Codex:
+    // external/codex/codex-rs/core/src/context_manager/history.rs::process_item
+    // applies the model truncation policy with a serialization budget before
+    // persisting function/custom tool outputs into prompt history.
+    let policy = TruncationPolicy::Bytes(max_output_bytes) * 1.2;
     for item in items {
         match item {
             PromptItem::Input(ResponseInputItem::FunctionCallOutput { output, .. })
             | PromptItem::Input(ResponseInputItem::CustomToolCallOutput { output, .. })
             | PromptItem::Response(ResponseItem::FunctionCallOutput { output, .. })
             | PromptItem::Response(ResponseItem::CustomToolCallOutput { output, .. }) => {
-                truncate_output_payload(output, max_output_bytes);
+                truncate_output_payload(output, policy);
             }
             _ => {}
         }
@@ -227,31 +235,15 @@ fn replace_output_images(output: &mut FunctionCallOutputPayload) {
     }
 }
 
-fn truncate_output_payload(output: &mut FunctionCallOutputPayload, max_output_bytes: usize) {
+fn truncate_output_payload(output: &mut FunctionCallOutputPayload, policy: TruncationPolicy) {
     match &mut output.body {
         FunctionCallOutputBody::Text(text) => {
-            truncate_text_in_place(text, max_output_bytes);
+            *text = truncate_text(text, policy);
         }
         FunctionCallOutputBody::ContentItems(items) => {
-            for item in items {
-                if let FunctionCallOutputContentItem::InputText { text } = item {
-                    truncate_text_in_place(text, max_output_bytes);
-                }
-            }
+            *items = truncate_function_output_items_with_policy(items, policy);
         }
     }
-}
-
-fn truncate_text_in_place(text: &mut String, max_output_bytes: usize) {
-    if text.len() <= max_output_bytes {
-        return;
-    }
-    let mut end = max_output_bytes;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text.truncate(end);
-    text.push_str("\n[... output truncated ...]");
 }
 
 fn function_call_id(item: &PromptItem) -> Option<&str> {

@@ -1,0 +1,37 @@
+{
+  "name": "tool_search_client",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/tools.rs client tool_search output behavior.",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "search tools" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "tool_search_call",
+          "id": "search-item",
+          "status": "completed",
+          "call_id": "search-1",
+          "execution": "client",
+          "arguments": { "query": "exec" }
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "searched" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

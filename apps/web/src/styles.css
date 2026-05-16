@@ -30,3 +30,29 @@ body {
 * {
   box-sizing: border-box;
 }
+
+select option {
+  background: var(--codex-panel);
+  color: var(--codex-text);
+}
+
+.codex-terminal.wterm.theme-monokai {
+  --term-bg: transparent;
+  --term-fg: var(--codex-text);
+  --term-cursor: var(--codex-accent);
+  --term-font-size: 13px;
+  --term-row-height: 16px;
+  border-radius: 0;
+  box-shadow: none;
+  height: 100%;
+  min-height: 0;
+}
+
+.codex-terminal.wterm {
+  padding: 10px 12px;
+}
+
+.codex-file-tree {
+  display: block;
+  min-height: 0;
+}

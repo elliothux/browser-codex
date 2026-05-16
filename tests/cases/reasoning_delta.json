@@ -1,22 +1,66 @@
 {
   "name": "reasoning_delta",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/items.rs reasoning delta behavior, wrapped with an exec_command tool turn so default conformance remains tool-backed.",
   "initialFiles": [],
-  "userInput": [{ "type": "text", "text": "think briefly" }],
+  "userInput": [{ "type": "text", "text": "run a tool then think briefly" }],
+  "execApproval": "auto",
   "modelResponses": [
     [
       { "type": "response.created", "response": { "id": "resp-1" } },
-      { "type": "response.reasoning_text.delta", "delta": "think" },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "exec-item",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"printf thought\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
+          "call_id": "exec-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.added",
+        "item": {
+          "type": "reasoning",
+          "id": "reasoning-1",
+          "summary": [{ "type": "summary_text", "text": "" }]
+        }
+      },
+      {
+        "type": "response.reasoning_summary_text.delta",
+        "delta": "think",
+        "summary_index": 0
+      },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "reasoning",
+          "id": "reasoning-1",
+          "summary": [{ "type": "summary_text", "text": "think" }]
+        }
+      },
       {
         "type": "response.output_item.done",
         "item": {
           "type": "message",
-          "id": "msg-1",
+          "id": "msg-2",
           "role": "assistant",
           "content": [{ "type": "output_text", "text": "done" }]
         }
       },
-      { "type": "response.completed", "response": { "id": "resp-1" } }
+      { "type": "response.completed", "response": { "id": "resp-2" } }
     ]
   ],
-  "exec": []
+  "exec": [
+    {
+      "wall_time_ms": 4,
+      "output": [116, 104, 111, 117, 103, 104, 116],
+      "process_id": null,
+      "exit_code": 0,
+      "original_token_count": 2
+    }
+  ]
 }

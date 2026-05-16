@@ -201,7 +201,12 @@ pub async fn apply_patch_tool(call: &ToolCall, ctx: &ToolContext<'_>) -> CoreRes
                 call_id: call.call_id.clone(),
                 success: true,
             });
-            Ok(execution(call, print_summary(&summary), Some(true), events))
+            Ok(execution(
+                call,
+                format_success_output(&print_summary(&summary)),
+                Some(true),
+                events,
+            ))
         }
         Err(error) => {
             events.push(EventMsg::PatchApplyEnd {
@@ -724,6 +729,15 @@ fn print_summary(affected: &AffectedPaths) -> String {
         out.push_str(&format!("D {path}\n"));
     }
     out
+}
+
+fn format_success_output(summary: &str) -> String {
+    // Mirrors upstream Codex:
+    // external/codex/codex-rs/core/src/tools/handlers/apply_patch.rs::intercept_apply_patch
+    // returns freeform apply_patch success through ApplyPatchRuntime unified exec
+    // output. Divergence: the wasm host applies patches in-process, so the wall
+    // time is a deterministic placeholder normalized by conformance tests.
+    format!("Exit code: 0\nWall time: 0.0000 seconds\nOutput:\n{summary}")
 }
 
 #[cfg(test)]

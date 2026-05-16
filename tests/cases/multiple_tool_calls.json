@@ -1,5 +1,6 @@
 {
   "name": "multiple_tool_calls",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/tools.rs multi-tool follow-up behavior and unified_exec.rs output shape.",
   "initialFiles": [],
   "userInput": [{ "type": "text", "text": "run multiple tools" }],
   "execApproval": "auto",
@@ -12,7 +13,7 @@
           "type": "function_call",
           "id": "exec-item",
           "name": "exec_command",
-          "arguments": "{\"cmd\":\"printf hi\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
+          "arguments": "{\"cmd\":\"printf 'hi\\\\n'\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
           "call_id": "exec-1"
         }
       },

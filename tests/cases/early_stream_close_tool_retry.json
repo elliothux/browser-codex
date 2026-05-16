@@ -1,5 +1,6 @@
 {
   "name": "early_stream_close_tool_retry",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/stream_no_completed.rs retry behavior with a completed tool call and unified exec output from unified_exec.rs.",
   "initialFiles": [],
   "userInput": [{ "type": "text", "text": "retry after tool call close" }],
   "execApproval": "auto",
@@ -12,7 +13,7 @@
           "type": "function_call",
           "id": "exec-item",
           "name": "exec_command",
-          "arguments": "{\"cmd\":\"printf hi\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
+          "arguments": "{\"cmd\":\"printf 'hi\\\\n'\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
           "call_id": "exec-1"
         }
       }

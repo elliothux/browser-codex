@@ -1,5 +1,6 @@
 {
   "name": "exec_success",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/unified_exec.rs successful function-call output behavior.",
   "initialFiles": [],
   "userInput": [{ "type": "text", "text": "run command" }],
   "execApproval": "auto",
@@ -12,7 +13,7 @@
           "type": "function_call",
           "id": "exec-item",
           "name": "exec_command",
-          "arguments": "{\"cmd\":\"printf hi\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
+          "arguments": "{\"cmd\":\"printf 'hi\\\\n'\",\"workdir\":\"/workspace\",\"yield_time_ms\":1,\"max_output_tokens\":20}",
           "call_id": "exec-1"
         }
       },

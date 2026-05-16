@@ -4,13 +4,14 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 use codex_browser_core::{
-    ApplyPatchApprovalRequest, ApprovalDecision, ContentItem, ConversationItem, CoreConfig,
-    CoreError, CoreResult, DirEntry, ExecApprovalMode, ExecApprovalRequest, ExecOutputSnapshot,
-    ExecRequest, FileMetadata, FunctionCallOutputPayload, History, HostApprovals, HostExec,
+    ApplyPatchApprovalRequest, ApprovalDecision, CancellationToken, ContentItem, ConversationItem,
+    CoreConfig, CoreError, CoreResult, DirEntry, EventMsg, ExecApprovalMode, ExecApprovalRequest,
+    ExecOutputSnapshot, ExecRequest, FileMetadata, FunctionCallOutputBody,
+    FunctionCallOutputContentItem, FunctionCallOutputPayload, History, HostApprovals, HostExec,
     HostFileSystem, HostRuntime, HostStorage, ModelRequestOptions, ModelTransport,
     OutputPollOptions, Prompt, PromptItem, ResponseEnvelope, ResponseEvent, ResponseInputItem,
     ResponseItem, ResponseStream, Session, StorageEntry, TerminalSize, ToolCall, ToolRouter,
-    UserInput,
+    TurnEventSink, UserInput,
 };
 use futures::executor::block_on;
 use futures::stream;
@@ -18,19 +19,54 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
-fn no_tool_assistant_final() {
-    let model = Rc::new(ScriptedModel::new(vec![vec![
-        ev_created("resp-1"),
-        ev_assistant_message("msg-1", "done"),
-        ev_completed("resp-1"),
-    ]]));
-    let host = host_with_model(model.clone());
-    let mut session = Session::new(CoreConfig::default(), host).unwrap();
+fn tool_backed_assistant_final() {
+    // Follows upstream Codex turn-loop tests in
+    // external/codex/codex-rs/core/tests/suite/tools.rs: a completed tool call
+    // must be followed by a second model request before the assistant final.
+    let model = Rc::new(ScriptedModel::new(vec![
+        vec![
+            ev_created("resp-1"),
+            ResponseEvent::OutputItemDone {
+                item: ResponseItem::FunctionCall {
+                    id: Some("exec-item".to_string()),
+                    name: "exec_command".to_string(),
+                    namespace: None,
+                    arguments: r#"{"cmd":"printf done","workdir":"/workspace"}"#.to_string(),
+                    call_id: "exec-1".to_string(),
+                },
+            },
+            ev_completed("resp-1"),
+        ],
+        vec![
+            ev_created("resp-2"),
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-2"),
+        ],
+    ]));
+    let exec = Rc::new(ScriptedExec::new(vec![ExecOutputSnapshot {
+        wall_time_ms: 1,
+        output: b"done\n".to_vec(),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: Some(1),
+    }]));
+    let host = HostRuntime::new(
+        model.clone(),
+        Rc::new(MemoryFs::default()),
+        exec,
+        Rc::new(ScriptedApprovals::allow()),
+    );
+    let config = CoreConfig {
+        exec_approval: ExecApprovalMode::Auto,
+        ..Default::default()
+    };
+    let mut session = Session::new(config, host).unwrap();
 
-    let result = block_on(session.run_turn(text_input("hello"))).unwrap();
+    let result = block_on(session.run_turn(text_input("use a tool"))).unwrap();
 
     assert_eq!(result.final_message.as_deref(), Some("done"));
-    assert_eq!(model.prompts.borrow().len(), 1);
+    assert_eq!(result.tool_outputs.len(), 1);
+    assert_eq!(model.prompts.borrow().len(), 2);
     assert!(
         result
             .events
@@ -93,6 +129,67 @@ fn reasoning_deltas_are_emitted() {
         event,
         codex_browser_core::EventMsg::ReasoningContentDelta { delta } if delta == "think"
     )));
+}
+
+#[test]
+fn run_turn_with_event_sink_streams_events_before_returning() {
+    let model = Rc::new(ScriptedModel::new(vec![vec![
+        ev_created("resp-1"),
+        ResponseEvent::OutputTextDelta {
+            delta: "he".to_string(),
+        },
+        ResponseEvent::OutputTextDelta {
+            delta: "llo".to_string(),
+        },
+        ev_assistant_message("msg-1", "hello"),
+        ev_completed("resp-1"),
+    ]]));
+    let host = host_with_model(model);
+    let mut session = Session::new(CoreConfig::default(), host).unwrap();
+    let sink = RecordingSink::default();
+    let token = CancellationToken::new();
+
+    let result =
+        block_on(session.run_turn_with_event_sink(text_input("stream"), Some(&sink), &token))
+            .unwrap();
+
+    assert_eq!(result.final_message.as_deref(), Some("hello"));
+    let streamed = sink.events.borrow();
+    assert!(matches!(
+        streamed.first(),
+        Some(EventMsg::TurnStarted { .. })
+    ));
+    assert!(streamed.iter().any(|event| matches!(
+        event,
+        EventMsg::AgentMessageContentDelta { delta } if delta == "he"
+    )));
+    assert!(matches!(
+        streamed.last(),
+        Some(EventMsg::TurnComplete { .. })
+    ));
+}
+
+#[test]
+fn cancellation_token_stops_turn_before_sampling() {
+    let model = Rc::new(ScriptedModel::new(Vec::new()));
+    let host = host_with_model(model.clone());
+    let mut session = Session::new(CoreConfig::default(), host).unwrap();
+    let sink = RecordingSink::default();
+    let token = CancellationToken::new();
+    token.cancel();
+
+    let error =
+        block_on(session.run_turn_with_event_sink(text_input("cancel"), Some(&sink), &token))
+            .unwrap_err();
+
+    assert_eq!(error, CoreError::Cancelled);
+    assert!(model.prompts.borrow().is_empty());
+    assert!(
+        sink.events
+            .borrow()
+            .iter()
+            .any(|event| matches!(event, EventMsg::TurnCancelled { .. }))
+    );
 }
 
 #[test]
@@ -405,6 +502,89 @@ fn history_for_prompt_normalizes_tool_call_outputs() {
 }
 
 #[test]
+fn history_for_prompt_truncates_tool_output_text_like_upstream() {
+    let history = History::from_items(vec![
+        ConversationItem::Response {
+            item: ResponseItem::FunctionCall {
+                id: Some("exec-item".to_string()),
+                name: "exec_command".to_string(),
+                namespace: None,
+                arguments: r#"{"cmd":"true"}"#.to_string(),
+                call_id: "exec-1".to_string(),
+            },
+        },
+        ConversationItem::Input {
+            item: ResponseInputItem::FunctionCallOutput {
+                call_id: "exec-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("0123456789abcdef", Some(true)),
+            },
+        },
+    ]);
+
+    let prompt = history.for_prompt_with_output_limit(8);
+
+    let output = prompt
+        .iter()
+        .find_map(|item| match item {
+            PromptItem::Input(ResponseInputItem::FunctionCallOutput { output, .. }) => {
+                Some(output.text())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(output, "01234…6 chars truncated…bcdef");
+    assert!(!output.contains("[... output truncated ...]"));
+}
+
+#[test]
+fn history_for_prompt_truncates_content_items_with_shared_budget() {
+    let history = History::from_items(vec![
+        ConversationItem::Response {
+            item: ResponseItem::CustomToolCall {
+                id: Some("tool-item".to_string()),
+                status: Some("completed".to_string()),
+                call_id: "custom-1".to_string(),
+                name: "custom_tool".to_string(),
+                input: "payload".to_string(),
+            },
+        },
+        ConversationItem::Input {
+            item: ResponseInputItem::CustomToolCallOutput {
+                call_id: "custom-1".to_string(),
+                name: Some("custom_tool".to_string()),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::ContentItems(vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: "abcdef".to_string(),
+                        },
+                        FunctionCallOutputContentItem::InputText {
+                            text: "second item".to_string(),
+                        },
+                    ]),
+                    success: Some(true),
+                },
+            },
+        },
+    ]);
+
+    let prompt = history.for_prompt_with_output_limit(4);
+
+    let output = prompt
+        .iter()
+        .find_map(|item| match item {
+            PromptItem::Input(ResponseInputItem::CustomToolCallOutput { output, .. }) => {
+                Some(output.text())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        output,
+        "ab…1 chars truncated…def\n[omitted 1 text items ...]"
+    );
+}
+
+#[test]
 fn tool_search_routing_matches_upstream_client_guard() {
     let client_call = ResponseItem::ToolSearchCall {
         id: Some("tool-search-item".to_string()),
@@ -576,6 +756,100 @@ fn exec_command_passes_shell_and_login_to_host_boundary() {
 }
 
 #[test]
+fn write_stdin_passes_input_and_poll_options_to_host_boundary() {
+    let model = Rc::new(ScriptedModel::new(vec![
+        vec![
+            ev_created("resp-1"),
+            ResponseEvent::OutputItemDone {
+                item: ResponseItem::FunctionCall {
+                    id: Some("stdin-item".to_string()),
+                    name: "write_stdin".to_string(),
+                    namespace: None,
+                    arguments: r#"{"session_id":7,"chars":"hello\n","yield_time_ms":25,"max_output_tokens":40}"#.to_string(),
+                    call_id: "stdin-1".to_string(),
+                },
+            },
+            ev_completed("resp-1"),
+        ],
+        vec![
+            ev_created("resp-2"),
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-2"),
+        ],
+    ]));
+    let exec = Rc::new(ScriptedExec::new(vec![ExecOutputSnapshot {
+        wall_time_ms: 9,
+        output: b"accepted\n".to_vec(),
+        process_id: Some(7),
+        exit_code: None,
+        original_token_count: Some(2),
+    }]));
+    let host = HostRuntime::new(
+        model,
+        Rc::new(MemoryFs::default()),
+        exec.clone(),
+        Rc::new(ScriptedApprovals::allow()),
+    );
+    let mut session = Session::new(CoreConfig::default(), host).unwrap();
+
+    let result = block_on(session.run_turn(text_input("stdin"))).unwrap();
+
+    assert_eq!(result.tool_outputs[0].success, Some(true));
+    let requests = exec.stdin_requests.borrow();
+    assert_eq!(requests[0].0, 7);
+    assert_eq!(requests[0].1, "hello\n");
+    assert_eq!(requests[0].2.yield_time_ms, 25);
+    assert_eq!(requests[0].2.max_output_tokens, Some(40));
+}
+
+#[test]
+fn write_stdin_empty_chars_polls_existing_process() {
+    let model = Rc::new(ScriptedModel::new(vec![
+        vec![
+            ev_created("resp-1"),
+            ResponseEvent::OutputItemDone {
+                item: ResponseItem::FunctionCall {
+                    id: Some("poll-item".to_string()),
+                    name: "write_stdin".to_string(),
+                    namespace: None,
+                    arguments: r#"{"session_id":8,"chars":"","yield_time_ms":15}"#.to_string(),
+                    call_id: "poll-1".to_string(),
+                },
+            },
+            ev_completed("resp-1"),
+        ],
+        vec![
+            ev_created("resp-2"),
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-2"),
+        ],
+    ]));
+    let exec = Rc::new(ScriptedExec::new(vec![ExecOutputSnapshot {
+        wall_time_ms: 11,
+        output: b"later\n".to_vec(),
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+    }]));
+    let host = HostRuntime::new(
+        model,
+        Rc::new(MemoryFs::default()),
+        exec.clone(),
+        Rc::new(ScriptedApprovals::allow()),
+    );
+    let mut session = Session::new(CoreConfig::default(), host).unwrap();
+
+    let result = block_on(session.run_turn(text_input("poll"))).unwrap();
+
+    assert_eq!(result.tool_outputs[0].success, Some(true));
+    assert!(exec.stdin_requests.borrow().is_empty());
+    let requests = exec.poll_requests.borrow();
+    assert_eq!(requests[0].0, 8);
+    assert_eq!(requests[0].1.yield_time_ms, 15);
+    assert_eq!(requests[0].1.max_output_tokens, None);
+}
+
+#[test]
 fn exec_command_denied_approval_is_model_visible() {
     let model = Rc::new(ScriptedModel::new(vec![
         vec![
@@ -613,7 +887,7 @@ fn exec_command_denied_approval_is_model_visible() {
             .text
             .as_deref()
             .unwrap()
-            .contains("denied by approval policy")
+            .contains("rejected by user")
     );
 }
 
@@ -948,6 +1222,8 @@ impl HostFileSystem for MemoryFs {
 struct ScriptedExec {
     snapshots: RefCell<VecDeque<ExecOutputSnapshot>>,
     requests: RefCell<Vec<ExecRequest>>,
+    stdin_requests: RefCell<Vec<(i32, String, OutputPollOptions)>>,
+    poll_requests: RefCell<Vec<(i32, OutputPollOptions)>>,
 }
 
 impl ScriptedExec {
@@ -955,6 +1231,8 @@ impl ScriptedExec {
         Self {
             snapshots: RefCell::new(snapshots.into()),
             requests: RefCell::new(Vec::new()),
+            stdin_requests: RefCell::new(Vec::new()),
+            poll_requests: RefCell::new(Vec::new()),
         }
     }
 }
@@ -971,10 +1249,13 @@ impl HostExec for ScriptedExec {
 
     async fn write_stdin(
         &self,
-        _process_id: i32,
-        _input: String,
-        _options: OutputPollOptions,
+        process_id: i32,
+        input: String,
+        options: OutputPollOptions,
     ) -> CoreResult<ExecOutputSnapshot> {
+        self.stdin_requests
+            .borrow_mut()
+            .push((process_id, input, options));
         self.snapshots
             .borrow_mut()
             .pop_front()
@@ -983,9 +1264,10 @@ impl HostExec for ScriptedExec {
 
     async fn poll_output(
         &self,
-        _process_id: i32,
-        _options: OutputPollOptions,
+        process_id: i32,
+        options: OutputPollOptions,
     ) -> CoreResult<ExecOutputSnapshot> {
+        self.poll_requests.borrow_mut().push((process_id, options));
         self.snapshots
             .borrow_mut()
             .pop_front()
@@ -1027,6 +1309,18 @@ impl HostApprovals for ScriptedApprovals {
 
     async fn approve_patch(&self, _request: ApplyPatchApprovalRequest) -> ApprovalDecision {
         self.decision.clone()
+    }
+}
+
+#[derive(Default)]
+struct RecordingSink {
+    events: RefCell<Vec<EventMsg>>,
+}
+
+impl TurnEventSink for RecordingSink {
+    fn on_event(&self, event: &EventMsg) -> CoreResult<()> {
+        self.events.borrow_mut().push(event.clone());
+        Ok(())
     }
 }
 

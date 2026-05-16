@@ -19,6 +19,9 @@ pub enum EventMsg {
     TurnComplete {
         turn_id: String,
     },
+    TurnCancelled {
+        turn_id: String,
+    },
     ItemStarted {
         item_type: String,
     },

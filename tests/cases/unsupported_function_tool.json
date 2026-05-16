@@ -1,0 +1,36 @@
+{
+  "name": "unsupported_function_tool",
+  "source": "Derived from external/codex/codex-rs/core/tests/suite/tools.rs unsupported function tool behavior.",
+  "initialFiles": [],
+  "userInput": [{ "type": "text", "text": "call unknown function" }],
+  "modelResponses": [
+    [
+      { "type": "response.created", "response": { "id": "resp-1" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "function_call",
+          "id": "unknown-item",
+          "name": "unknown_function",
+          "arguments": "{}",
+          "call_id": "unknown-1"
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-1" } }
+    ],
+    [
+      { "type": "response.created", "response": { "id": "resp-2" } },
+      {
+        "type": "response.output_item.done",
+        "item": {
+          "type": "message",
+          "id": "msg-2",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "unsupported" }]
+        }
+      },
+      { "type": "response.completed", "response": { "id": "resp-2" } }
+    ]
+  ],
+  "exec": []
+}

@@ -1,0 +1,23 @@
+[package]
+name = "browser-codex-native-core-oracle"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+codex-core = { path = "../../../external/codex/codex-rs/core" }
+codex-protocol = { path = "../../../external/codex/codex-rs/protocol" }
+core_test_support = { path = "../../../external/codex/codex-rs/core/tests/common" }
+icu_calendar = "=2.1.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+wiremock = "0.6"
+
+[patch.crates-io]
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
